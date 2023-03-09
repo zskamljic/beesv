@@ -1,0 +1,20 @@
+{
+  "name": "BeeSV",
+  "version": "0.0.1",
+  "description": "BSV chrome extension",
+  "main": "index.js",
+  "author": "Zan Skamljic <zan.skamljic@gmail.com>",
+  "license": "MIT",
+  "scripts": {
+    "build": "webpack",
+    "release": "NODE_ENV=production yarn run build"
+  },
+  "devDependencies": {
+    "@wasm-tool/wasm-pack-plugin": "1.6.0",
+    "webpack": "5.76.0",
+    "webpack-cli": "5.0.1"
+  },
+  "dependencies": {
+    "copy-webpack-plugin": "^11.0.0"
+  }
+}

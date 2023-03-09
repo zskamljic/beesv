@@ -1,0 +1,5 @@
+.idea/**
+BeeSV.iml
+dist/**
+node_modules/**
+pkg/**
