@@ -5,7 +5,7 @@ const WasmPackPlugin = require('@wasm-tool/wasm-pack-plugin');
 module.exports = {
     mode: process.env.NODE_ENV || 'development',
     entry: {
-        popup: './popup/popup.js'
+        bootstrap: './bootstrap.js'
     },
     output: {
         path: path.resolve(__dirname, 'dist/')

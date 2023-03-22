@@ -1,3 +1,3 @@
 import('wallet').then(wasm => {
-    wasm.greet();
+    console.log('WASM loaded.');
 })

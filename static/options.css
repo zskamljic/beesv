@@ -1,0 +1,22 @@
+.table {
+    display: table;
+    width: 70%;
+}
+
+.row {
+    display: table-row;
+}
+
+.cell {
+    display: table-cell;
+    border: 1px solid black;
+    padding: 5px;
+    text-align: center;
+    vertical-align: middle;
+}
+
+input.text,
+input.text:focus {
+    border: none;
+    outline: none;
+}
