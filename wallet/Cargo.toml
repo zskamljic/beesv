@@ -15,6 +15,8 @@ console_error_panic_hook = { version = "0.1.7", optional = true }
 wee_alloc = { version = "0.4.5", optional = true }
 web-sys = { version = "0.3.61", features = ["Event", "HtmlInputElement"] }
 yew = { version = "0.20.0", features = ["csr"] }
+pbkdf2 = { version = "0.12.1", features = ["sha2"] }
+sha2 = "0.10.6"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.34"

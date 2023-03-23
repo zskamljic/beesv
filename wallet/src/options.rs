@@ -2,28 +2,50 @@ use wasm_bindgen::prelude::*;
 use web_sys::{Event, HtmlInputElement};
 use yew::prelude::*;
 
-use crate::util::log;
+use crate::{bip39, util::log};
 
 const WORDS: &str = include_str!("english.txt");
 
 #[function_component(Options)]
 pub fn options() -> Html {
+    let mnemonic_words = use_state(|| vec![String::default(); 12]);
+    let word_changed = {
+        let mnemonic_words = mnemonic_words.clone();
+        move |(index, word)| {
+            let mut value: Vec<_> = mnemonic_words.iter().cloned().collect();
+            value[index as usize] = word;
+            mnemonic_words.set(value);
+        }
+    };
+
+    let recover_clicked = {
+        move |_| {
+            let seed = bip39::generate_seed(&mnemonic_words.join(" "), "");
+            log(&seed.iter().map(|b| format!("{b:02x}")).collect::<String>())
+        }
+    };
+
     html! {
         <>
             <h1>{"Options"}</h1>
-            <MnemonicInput />
+            <MnemonicInput word_changed={word_changed.clone()}/>
             <MnemonicDatalist/>
-            <button>{"Recover"}</button>
+            <button onclick={recover_clicked}>{"Recover"}</button>
         </>
     }
 }
 
+#[derive(Properties, PartialEq)]
+struct MnemonicInputProps {
+    word_changed: Callback<(u32, String)>,
+}
+
 #[function_component(MnemonicInput)]
-fn mnemonic_input() -> Html {
+fn mnemonic_input(MnemonicInputProps { word_changed }: &MnemonicInputProps) -> Html {
     let rows: Vec<_> = (0..4)
         .map(|row| {
             html! {
-                <MnemonicRow number={row} />
+                <MnemonicRow number={row} word_changed={word_changed.clone()} />
             }
         })
         .collect();
@@ -38,15 +60,21 @@ fn mnemonic_input() -> Html {
 #[derive(Properties, PartialEq)]
 struct RowProps {
     number: u32,
+    word_changed: Callback<(u32, String)>,
 }
 
 #[function_component(MnemonicRow)]
-fn mnemonic_row(RowProps { number }: &RowProps) -> Html {
+fn mnemonic_row(
+    RowProps {
+        number,
+        word_changed,
+    }: &RowProps,
+) -> Html {
     let columns: Vec<_> = (0..3)
         .map(|column| {
-            let index = number * 3 + column + 1;
+            let index = number * 3 + column;
             html! {
-                <MnemonicCell index={index}/>
+                <MnemonicCell index={index} word_changed={word_changed.clone()}/>
             }
         })
         .collect();
@@ -61,13 +89,21 @@ fn mnemonic_row(RowProps { number }: &RowProps) -> Html {
 #[derive(Properties, PartialEq)]
 struct CellProps {
     index: u32,
+    word_changed: Callback<(u32, String)>,
 }
 
 #[function_component(MnemonicCell)]
-fn mnemonic_cell(CellProps { index }: &CellProps) -> Html {
+fn mnemonic_cell(
+    CellProps {
+        index,
+        word_changed,
+    }: &CellProps,
+) -> Html {
     let id = format!("word{index}");
-    let placeholder = format!("Word {index}");
+    let placeholder = format!("Word {}", index + 1);
 
+    let index = index.clone();
+    let word_changed = word_changed.clone();
     let on_input = {
         move |e: InputEvent| {
             let target = e.target();
@@ -75,6 +111,7 @@ fn mnemonic_cell(CellProps { index }: &CellProps) -> Html {
 
             if let Some(input) = input {
                 input.set_custom_validity("");
+                word_changed.emit((index, input.value()))
             }
         }
     };
@@ -92,7 +129,7 @@ fn mnemonic_cell(CellProps { index }: &CellProps) -> Html {
 
     html! {
         <div class="cell">
-            <input id={id} oninput={on_input} onchange={on_change} type="text" list="word_list" placeholder={placeholder}/>
+            <input id={id} oninput={on_input.clone()} onchange={on_change} type="text" list="word_list" placeholder={placeholder}/>
         </div>
     }
 }
