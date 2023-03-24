@@ -17,6 +17,9 @@ web-sys = { version = "0.3.61", features = ["Event", "HtmlInputElement"] }
 yew = { version = "0.20.0", features = ["csr"] }
 pbkdf2 = { version = "0.12.1", features = ["sha2"] }
 sha2 = "0.10.6"
+hmac = "0.12.1"
+bs58 = "0.4.0"
+hex = "0.4.3"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.34"
