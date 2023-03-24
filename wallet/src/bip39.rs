@@ -14,7 +14,7 @@ pub fn generate_seed(mnemonic: &str, password: &str) -> [u8; 64] {
     return seed;
 }
 
-pub fn to_xprv(seed: [u8; 64]) -> JsResult<String> {
+pub fn format_xprv(seed: [u8; 64]) -> JsResult<String> {
     type HmacSha256 = Hmac<Sha512>;
     let mut hmac = match HmacSha256::new_from_slice(b"Bitcoin seed") {
         Ok(hmac) => hmac,
@@ -50,7 +50,7 @@ pub fn to_xprv(seed: [u8; 64]) -> JsResult<String> {
 mod tests {
     use crate::bip39::generate_seed;
 
-    use super::to_xprv;
+    use super::format_xprv;
 
     #[test]
     fn generate_seed_generates_correct() {
@@ -73,7 +73,7 @@ mod tests {
 
         assert_eq!(
             "xprv9s21ZrQH143K43iibmycYZ1GRBnkoqG14kHwrGAAkjQTbT3DG5xgizWtvzz49AeozJjUSKf36iWNkRsuFN7PLWo7Kz4AzJqCB1kSHqRhwGE",
-            to_xprv(seed).expect("Should succeed")
+            format_xprv(seed).expect("Should succeed")
         );
     }
 }
