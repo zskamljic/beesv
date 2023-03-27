@@ -29,14 +29,14 @@ impl Seed {
 
         let seed = hmac.finalize().into_bytes();
 
-        return Ok(XPrv {
+        Ok(XPrv {
             key: seed[..32]
                 .try_into()
                 .map_err(|e| JsValue::from_str(&format!("{e:?}")))?,
             chain_code: seed[32..]
                 .try_into()
                 .map_err(|e| JsValue::from_str(&format!("{e:?}")))?,
-        });
+        })
     }
 }
 
