@@ -2,7 +2,7 @@ use wasm_bindgen::prelude::*;
 use web_sys::{Event, HtmlInputElement};
 use yew::prelude::*;
 
-use crate::{bip39, util::log};
+use crate::{bip39::Seed, util::log};
 
 const WORDS: &str = include_str!("english.txt");
 
@@ -20,15 +20,15 @@ pub fn options() -> Html {
 
     let recover_clicked = {
         move |_| {
-            let seed = bip39::generate_seed(&mnemonic_words.join(" "), "");
-            log(&seed.iter().map(|b| format!("{b:02x}")).collect::<String>())
+            let seed = Seed::generate(&mnemonic_words.join(" "), "");
+            log(&seed.to_xprv().expect("Key should be formatted"));
         }
     };
 
     html! {
         <>
             <h1>{"Options"}</h1>
-            <MnemonicInput word_changed={word_changed.clone()}/>
+            <MnemonicInput word_changed={word_changed}/>
             <MnemonicDatalist/>
             <button onclick={recover_clicked}>{"Recover"}</button>
         </>
@@ -102,7 +102,7 @@ fn mnemonic_cell(
     let id = format!("word{index}");
     let placeholder = format!("Word {}", index + 1);
 
-    let index = index.clone();
+    let index = *index;
     let word_changed = word_changed.clone();
     let on_input = {
         move |e: InputEvent| {

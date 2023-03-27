@@ -7,6 +7,7 @@ use yew::Renderer;
 #[global_allocator]
 static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
+mod bip32;
 mod bip39;
 mod options;
 mod popup;
