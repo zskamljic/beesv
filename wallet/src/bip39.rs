@@ -19,7 +19,7 @@ impl Seed {
         Self { seed }
     }
 
-    pub fn to_xprv(&self) -> JsResult<String> {
+    pub fn to_xprv(&self) -> JsResult<XPrv> {
         type HmacSha256 = Hmac<Sha512>;
         let mut hmac = match HmacSha256::new_from_slice(b"Bitcoin seed") {
             Ok(hmac) => hmac,
@@ -29,11 +29,32 @@ impl Seed {
 
         let seed = hmac.finalize().into_bytes();
 
+        return Ok(XPrv {
+            key: seed[..32]
+                .try_into()
+                .map_err(|e| JsValue::from_str(&format!("{e:?}")))?,
+            chain_code: seed[32..]
+                .try_into()
+                .map_err(|e| JsValue::from_str(&format!("{e:?}")))?,
+        });
+    }
+}
+
+#[derive(Debug)]
+pub struct XPrv {
+    key: [u8; 32],
+    chain_code: [u8; 32],
+}
+
+impl TryFrom<XPrv> for String {
+    type Error = JsValue;
+
+    fn try_from(value: XPrv) -> JsResult<Self> {
         let mut xprv = vec![0x04, 0x88, 0xAD, 0xE4];
         xprv.extend([0u8; 9]);
-        xprv.extend(&seed[32..]);
+        xprv.extend(&value.chain_code);
         xprv.push(0x0);
-        xprv.extend(&seed[..32]);
+        xprv.extend(&value.key);
 
         let hashed_xprv = {
             let mut hash = Sha256::new();
@@ -67,7 +88,7 @@ impl TryFrom<&str> for Seed {
 
 #[cfg(test)]
 mod tests {
-    use crate::bip39::Seed;
+    use crate::{bip39::Seed, util::JsResult};
 
     #[test]
     fn generate_seed_generates_correct() {
@@ -81,13 +102,16 @@ mod tests {
     }
 
     #[test]
-    fn generate_xprv_returns_correct() {
+    fn generate_xprv_returns_correct() -> JsResult<()> {
         let seed = "88a6b54bf042d0ba673e497dd283feeca6a1d0fd31cf26d8b7e115f2b3cc92294541855a9c0e74a3c3b87a5aee5adc89faf0702721b6b8af31c0d2b403aba531";
-        let seed: Seed = seed.try_into().expect("Should decode");
+        let seed: Seed = seed.try_into()?;
+        let xprv = seed.to_xprv()?;
+        let serialized: String = xprv.try_into()?;
 
         assert_eq!(
             "xprv9s21ZrQH143K43iibmycYZ1GRBnkoqG14kHwrGAAkjQTbT3DG5xgizWtvzz49AeozJjUSKf36iWNkRsuFN7PLWo7Kz4AzJqCB1kSHqRhwGE",
-            seed.to_xprv().expect("Should succeed")
+            &serialized
         );
+        Ok(())
     }
 }

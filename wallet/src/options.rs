@@ -21,7 +21,11 @@ pub fn options() -> Html {
     let recover_clicked = {
         move |_| {
             let seed = Seed::generate(&mnemonic_words.join(" "), "");
-            log(&seed.to_xprv().expect("Key should be formatted"));
+            let xprv: String = seed
+                .to_xprv()
+                .and_then(|k| k.try_into())
+                .expect("Key should be formatted");
+            log(&xprv);
         }
     };
 
