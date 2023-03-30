@@ -5,7 +5,10 @@ use pbkdf2::pbkdf2_hmac;
 use sha2::Sha512;
 use wasm_bindgen::JsValue;
 
-use crate::{bip32::XPrv, util::JsResult};
+use crate::{
+    bip32::XPrv,
+    util::{map_any_err, JsResult},
+};
 
 pub struct Seed {
     seed: [u8; 64],
@@ -32,12 +35,8 @@ impl Seed {
         let seed = hmac.finalize().into_bytes();
 
         Ok(XPrv::new(
-            seed[..32]
-                .try_into()
-                .map_err(|e| JsValue::from_str(&format!("{e:?}")))?,
-            seed[32..]
-                .try_into()
-                .map_err(|e| JsValue::from_str(&format!("{e:?}")))?,
+            seed[..32].try_into().map_err(map_any_err)?,
+            seed[32..].try_into().map_err(map_any_err)?,
         ))
     }
 }
