@@ -23,7 +23,7 @@ pub fn options() -> Html {
             let seed = Seed::generate(&mnemonic_words.join(" "), "");
             let xprv: String = seed
                 .to_xprv()
-                .and_then(|k| k.try_into())
+                .and_then(|k| k.serialize())
                 .expect("Key should be formatted");
             log(&xprv);
         }

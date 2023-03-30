@@ -1,3 +1,5 @@
+use std::error::Error;
+
 use wasm_bindgen::prelude::*;
 
 pub type JsResult<T> = Result<T, JsValue>;
@@ -19,4 +21,8 @@ impl<T> OrError<T> for Option<T> {
             None => Err(JsValue::from_str(message)),
         }
     }
+}
+
+pub fn map_any_err<T: Error>(error: T) -> JsValue {
+    JsValue::from_str(&format!("{error:?}"))
 }
