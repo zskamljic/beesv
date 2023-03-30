@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use hmac::{Hmac, Mac};
 use ripemd::Ripemd160;
-use secp256k1::{Secp256k1, SecretKey};
+use secp256k1::{PublicKey, Secp256k1, SecretKey};
 use sha2::{Digest, Sha256, Sha512};
 use wasm_bindgen::JsValue;
 
@@ -63,6 +63,20 @@ impl XPrv {
         })
     }
 
+    fn derive_public(&self) -> JsResult<XPub> {
+        let public_key = SecretKey::from_slice(&self.key)
+            .map_err(map_any_err)?
+            .public_key(&Secp256k1::new());
+
+        Ok(XPub {
+            depth: self.depth,
+            child_number: self.child_number,
+            parent_fingerprint: self.parent_fingerprint,
+            public_key,
+            chain_code: self.chain_code,
+        })
+    }
+
     pub fn serialize(&self) -> JsResult<String> {
         let mut xprv = vec![0x04, 0x88, 0xAD, 0xE4];
         xprv.push(self.depth);
@@ -113,6 +127,32 @@ impl FromStr for XPrv {
             key: decoded[46..78].try_into().map_err(map_any_err)?,
             chain_code: decoded[13..45].try_into().map_err(map_any_err)?,
         })
+    }
+}
+
+struct XPub {
+    depth: u8,
+    child_number: u32,
+    parent_fingerprint: [u8; 4],
+    public_key: PublicKey,
+    chain_code: [u8; 32],
+}
+
+impl From<XPub> for String {
+    fn from(value: XPub) -> Self {
+        let mut xprv = vec![0x04, 0x88, 0xB2, 0x1E];
+        xprv.push(value.depth);
+        xprv.extend(value.parent_fingerprint);
+        xprv.extend(value.child_number.to_be_bytes());
+        xprv.extend(&value.chain_code);
+        xprv.extend(&value.public_key.serialize());
+
+        let hashed_xprv = sha256(&xprv);
+        let hashed_xprv = sha256(&hashed_xprv);
+
+        xprv.extend(&hashed_xprv[..4]);
+
+        bs58::encode(xprv).into_string()
     }
 }
 
@@ -170,6 +210,22 @@ mod tests {
         let serialized: String = derived.serialize()?;
         assert_eq!(
             "xprv9z4pot5VBttmtdRTWfWQmoH1taj2axGVzFqSb8C9xaxKymcFzXBDptWmT7FwuEzG3ryjH4ktypQSAewRiNMjANTtpgP4mLTj34bhnZX7UiM",
+            serialized
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn generate_public() -> JsResult<()> {
+        let xprv = "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi";
+        let key: XPrv = xprv.parse()?;
+
+        let public = key.derive_public()?;
+
+        let serialized: String = public.into();
+        assert_eq!(
+            "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8",
             serialized
         );
 
