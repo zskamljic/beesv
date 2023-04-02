@@ -18,7 +18,7 @@ trait DerivePath<T> {
             return Err(JsValue::from_str("Invalid derivation path"));
         }
         Ok(path
-            .split("/")
+            .split('/')
             .skip(1)
             .filter_map(|p| match p.strip_suffix('\'') {
                 Some(value) => value.parse::<u32>().map(|v| HARDENED_INDEX + v).ok(),
