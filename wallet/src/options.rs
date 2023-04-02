@@ -2,7 +2,7 @@ use wasm_bindgen::prelude::*;
 use web_sys::{Event, HtmlInputElement};
 use yew::prelude::*;
 
-use crate::{bip39::Seed, util::log};
+use crate::{bip32::DerivePath, bip39::Seed, util::log};
 
 const WORDS: &str = include_str!("english.txt");
 
@@ -21,11 +21,18 @@ pub fn options() -> Html {
     let recover_clicked = {
         move |_| {
             let seed = Seed::generate(&mnemonic_words.join(" "), "");
-            let xprv: String = seed
-                .to_xprv()
-                .and_then(|k| k.serialize())
-                .expect("Key should be formatted");
-            log(&xprv);
+            let xprv = seed.to_xprv().expect("Should create a private key");
+            let derived_key = xprv.derive_path("m/0'/0/0").expect("Should derive key");
+            let public = derived_key
+                .derive_public()
+                .expect("Should create public key");
+            for i in 0..400 {
+                let address = public
+                    .derive(i)
+                    .expect("Derivation of public key should succeed")
+                    .to_address();
+                log(&format!("Address: {address}"));
+            }
         }
     };
 

@@ -11,7 +11,7 @@ use crate::util::{map_any_err, JsResult};
 
 const HARDENED_INDEX: u32 = 0x80000000;
 
-trait DerivePath<T> {
+pub trait DerivePath<T> {
     fn parse_path(path: &str) -> JsResult<Vec<u32>> {
         let path_regex = Regex::new(r"^m(/\d+'?)+$").map_err(map_any_err)?;
         if !path_regex.is_match(path) {
@@ -82,7 +82,7 @@ impl XPrv {
         })
     }
 
-    fn derive_public(&self) -> JsResult<XPub> {
+    pub fn derive_public(&self) -> JsResult<XPub> {
         let public_key = SecretKey::from_slice(&self.key)
             .map_err(map_any_err)?
             .public_key(&Secp256k1::new());
@@ -159,7 +159,7 @@ impl FromStr for XPrv {
     }
 }
 
-struct XPub {
+pub struct XPub {
     depth: u8,
     child_number: u32,
     parent_fingerprint: [u8; 4],
@@ -168,7 +168,40 @@ struct XPub {
 }
 
 impl XPub {
-    fn to_address(&self) -> String {
+    fn fingerprint(&self) -> [u8; 4] {
+        let sha = sha256(&self.public_key.serialize());
+        let ripemd = ripemd160(&sha);
+        ripemd[..4].try_into().expect("Should always succeed")
+    }
+
+    pub fn derive(&self, index: u32) -> JsResult<XPub> {
+        if index >= HARDENED_INDEX {
+            return Err(JsValue::from_str("Cannot derive hardened keys from public"));
+        }
+        let mut hmac = Hmac::<Sha512>::new_from_slice(&self.chain_code).map_err(map_any_err)?;
+        let serialized_point = self.public_key.serialize();
+        hmac.update(&serialized_point);
+        hmac.update(&index.to_be_bytes());
+        let i = hmac.finalize().into_bytes();
+
+        let public_key = SecretKey::from_slice(&i[..32])
+            .map_err(map_any_err)?
+            .public_key(&Secp256k1::new())
+            .combine(&self.public_key)
+            .map_err(map_any_err)?;
+
+        let chain_code = i[32..].try_into().map_err(map_any_err)?;
+
+        Ok(XPub {
+            depth: self.depth + 1,
+            child_number: index,
+            parent_fingerprint: self.fingerprint(),
+            public_key,
+            chain_code,
+        })
+    }
+
+    pub fn to_address(&self) -> String {
         let serialized_key = self.public_key.serialize();
         let hashed = ripemd160(&sha256(&serialized_key));
         let mut prefixed = Vec::with_capacity(21);
@@ -179,6 +212,46 @@ impl XPub {
         prefixed.extend(&checksum[..4]);
 
         bs58::encode(prefixed).into_string()
+    }
+}
+
+impl DerivePath<XPub> for XPub {
+    fn derive_path(&self, path: &str) -> JsResult<XPub> {
+        let path = Self::parse_path(path)?;
+
+        if path.iter().any(|i| *i >= HARDENED_INDEX) {
+            return Err(JsValue::from_str("Cannot derive hardened keys from public"));
+        }
+
+        let mut key = self.derive(path[0])?;
+        for item in path.iter().skip(1) {
+            key = key.derive(*item)?;
+        }
+        Ok(key)
+    }
+}
+
+impl FromStr for XPub {
+    type Err = JsValue;
+
+    fn from_str(s: &str) -> JsResult<Self> {
+        let decoded = bs58::decode(s).into_vec().map_err(map_any_err)?;
+
+        let checksum = sha256(&sha256(&decoded[..78]));
+
+        println!("Length: {}", decoded.len());
+
+        if decoded[78..] != checksum[..4] {
+            return Err(JsValue::from_str("Checksum mismatch"));
+        }
+
+        Ok(XPub {
+            depth: decoded[4],
+            child_number: u32::from_be_bytes(decoded[9..13].try_into().map_err(map_any_err)?),
+            parent_fingerprint: decoded[5..9].try_into().map_err(map_any_err)?,
+            public_key: PublicKey::from_slice(&decoded[45..78]).map_err(map_any_err)?,
+            chain_code: decoded[13..45].try_into().map_err(map_any_err)?,
+        })
     }
 }
 
@@ -216,7 +289,7 @@ fn ripemd160(data: &[u8]) -> [u8; 20] {
 mod tests {
     use crate::{bip32::DerivePath, util::JsResult};
 
-    use super::{XPrv, HARDENED_INDEX};
+    use super::{XPrv, XPub, HARDENED_INDEX};
 
     #[test]
     fn derive_hardened_returns_correct() -> JsResult<()> {
@@ -361,6 +434,22 @@ mod tests {
 
         let address = result.to_address();
         assert_eq!("1BvgsfsZQVtkLS69NvGF8rw6NZW2ShJQHr", address);
+
+        Ok(())
+    }
+
+    #[test]
+    fn public_key_derives_expected() -> JsResult<()> {
+        let xpub = "xpub6D4BDPcP2GT577Vvch3R8wDkScZWzQzMMUm3PWbmWvVJrZwQY4VUNgqFJPMM3No2dFDFGTsxxpG5uJh7n7epu4trkrX7x7DogT5Uv6fcLW5";
+        let xpub: XPub = xpub.parse()?;
+
+        let derived = xpub.derive_path("m/2/1000000000")?;
+        let serialized: String = derived.into();
+
+        assert_eq!(
+            "xpub6H1LXWLaKsWFhvm6RVpEL9P4KfRZSW7abD2ttkWP3SSQvnyA8FSVqNTEcYFgJS2UaFcxupHiYkro49S8yGasTvXEYBVPamhGW6cFJodrTHy",
+            serialized,
+        );
 
         Ok(())
     }
