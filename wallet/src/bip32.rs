@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
 use hmac::{Hmac, Mac};
+use regex::Regex;
 use ripemd::Ripemd160;
 use secp256k1::{PublicKey, Secp256k1, SecretKey};
 use sha2::{Digest, Sha256, Sha512};
@@ -9,6 +10,25 @@ use wasm_bindgen::JsValue;
 use crate::util::{map_any_err, JsResult};
 
 const HARDENED_INDEX: u32 = 0x80000000;
+
+trait DerivePath<T> {
+    fn parse_path(path: &str) -> JsResult<Vec<u32>> {
+        let path_regex = Regex::new(r"^m(/\d+'?)+$").map_err(map_any_err)?;
+        if !path_regex.is_match(path) {
+            return Err(JsValue::from_str("Invalid derivation path"));
+        }
+        Ok(path
+            .split("/")
+            .skip(1)
+            .filter_map(|p| match p.strip_suffix('\'') {
+                Some(value) => value.parse::<u32>().map(|v| HARDENED_INDEX + v).ok(),
+                None => p.parse().ok(),
+            })
+            .collect())
+    }
+
+    fn derive_path(&self, path: &str) -> JsResult<T>;
+}
 
 #[derive(Debug)]
 pub struct XPrv {
@@ -30,8 +50,7 @@ impl XPrv {
         }
     }
 
-    #[allow(unused)]
-    pub fn derive_private(&self, index: u32) -> JsResult<XPrv> {
+    pub fn derive(&self, index: u32) -> JsResult<XPrv> {
         let private_key = SecretKey::from_slice(&self.key).map_err(map_any_err)?;
         let mut hmac = Hmac::<Sha512>::new_from_slice(&self.chain_code).map_err(map_any_err)?;
 
@@ -106,6 +125,18 @@ impl XPrv {
     }
 }
 
+impl DerivePath<XPrv> for XPrv {
+    fn derive_path(&self, path: &str) -> JsResult<XPrv> {
+        let path = Self::parse_path(path)?;
+
+        let mut key = self.derive(path[0])?;
+        for item in path.iter().skip(1) {
+            key = key.derive(*item)?;
+        }
+        Ok(key)
+    }
+}
+
 impl FromStr for XPrv {
     type Err = JsValue;
 
@@ -164,7 +195,7 @@ fn sha256(data: &[u8]) -> [u8; 32] {
 
 #[cfg(test)]
 mod tests {
-    use crate::util::JsResult;
+    use crate::{bip32::DerivePath, util::JsResult};
 
     use super::{XPrv, HARDENED_INDEX};
 
@@ -173,7 +204,7 @@ mod tests {
         let xprv = "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi";
         let key: XPrv = xprv.parse()?;
 
-        let derived = key.derive_private(HARDENED_INDEX + 0)?;
+        let derived = key.derive(HARDENED_INDEX + 0)?;
 
         let serialized: String = derived.serialize()?;
         assert_eq!(
@@ -189,7 +220,7 @@ mod tests {
         let xprv = "xprv9uHRZZhk6KAJC1avXpDAp4MDc3sQKNxDiPvvkX8Br5ngLNv1TxvUxt4cV1rGL5hj6KCesnDYUhd7oWgT11eZG7XnxHrnYeSvkzY7d2bhkJ7";
         let key: XPrv = xprv.parse()?;
 
-        let derived = key.derive_private(1)?;
+        let derived = key.derive(1)?;
 
         let serialized: String = derived.serialize()?;
         assert_eq!(
@@ -205,7 +236,7 @@ mod tests {
         let xprv ="xprv9wTYmMFdV23N2TdNG573QoEsfRrWKQgWeibmLntzniatZvR9BmLnvSxqu53Kw1UmYPxLgboyZQaXwTCg8MSY3H2EU4pWcQDnRnrVA1xe8fs";
         let key: XPrv = xprv.parse()?;
 
-        let derived = key.derive_private(HARDENED_INDEX + 2)?;
+        let derived = key.derive(HARDENED_INDEX + 2)?;
 
         let serialized: String = derived.serialize()?;
         assert_eq!(
@@ -229,6 +260,69 @@ mod tests {
             serialized
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn parse_path_works_direct() -> JsResult<()> {
+        struct Dummy;
+
+        impl DerivePath<Dummy> for Dummy {
+            fn derive_path(&self, _: &str) -> JsResult<Dummy> {
+                Ok(Dummy)
+            }
+        }
+
+        let result = Dummy::parse_path("m/0/1/2/3")?;
+
+        assert_eq!(vec![0, 1, 2, 3], result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn parse_path_works_hardened() -> JsResult<()> {
+        struct Dummy;
+
+        impl DerivePath<Dummy> for Dummy {
+            fn derive_path(&self, _: &str) -> JsResult<Dummy> {
+                Ok(Dummy)
+            }
+        }
+
+        let result = Dummy::parse_path("m/0'/1'/2'/3'")?;
+
+        assert_eq!(
+            vec![
+                HARDENED_INDEX + 0,
+                HARDENED_INDEX + 1,
+                HARDENED_INDEX + 2,
+                HARDENED_INDEX + 3
+            ],
+            result
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn derive_by_path() -> JsResult<()> {
+        let xprv = "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi";
+        let key: XPrv = xprv.parse()?;
+
+        let path = "m/0'/1/2'/2/1000000000";
+        let result = key.derive_path(path)?;
+
+        assert_eq!(
+            "xprvA41z7zogVVwxVSgdKUHDy1SKmdb533PjDz7J6N6mV6uS3ze1ai8FHa8kmHScGpWmj4WggLyQjgPie1rFSruoUihUZREPSL39UNdE3BBDu76",
+            result.serialize()?
+        );
+
+        let public: String = result.derive_public()?.into();
+        assert_eq!(
+            "xpub6H1LXWLaKsWFhvm6RVpEL9P4KfRZSW7abD2ttkWP3SSQvnyA8FSVqNTEcYFgJS2UaFcxupHiYkro49S8yGasTvXEYBVPamhGW6cFJodrTHy",
+            public
+        );
         Ok(())
     }
 }
