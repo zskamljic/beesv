@@ -239,8 +239,6 @@ impl FromStr for XPub {
 
         let checksum = sha256(&sha256(&decoded[..78]));
 
-        println!("Length: {}", decoded.len());
-
         if decoded[78..] != checksum[..4] {
             return Err(JsValue::from_str("Checksum mismatch"));
         }
