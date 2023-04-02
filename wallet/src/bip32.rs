@@ -118,9 +118,7 @@ impl XPrv {
         let public_key = private_key.public_key(&Secp256k1::new());
 
         let sha = sha256(&public_key.serialize());
-        let mut ripemd = Ripemd160::new();
-        ripemd.update(sha);
-        let ripemd = ripemd.finalize();
+        let ripemd = ripemd160(&sha);
         ripemd[..4].try_into().expect("Should always succeed")
     }
 }
@@ -169,6 +167,21 @@ struct XPub {
     chain_code: [u8; 32],
 }
 
+impl XPub {
+    fn to_address(&self) -> String {
+        let serialized_key = self.public_key.serialize();
+        let hashed = ripemd160(&sha256(&serialized_key));
+        let mut prefixed = Vec::with_capacity(21);
+        prefixed.push(0x00);
+        prefixed.extend(&hashed);
+
+        let checksum = sha256(&sha256(&prefixed));
+        prefixed.extend(&checksum[..4]);
+
+        bs58::encode(prefixed).into_string()
+    }
+}
+
 impl From<XPub> for String {
     fn from(value: XPub) -> Self {
         let mut xprv = vec![0x04, 0x88, 0xB2, 0x1E];
@@ -191,6 +204,12 @@ fn sha256(data: &[u8]) -> [u8; 32] {
     let mut hash = Sha256::new();
     hash.update(data);
     hash.finalize().into()
+}
+
+fn ripemd160(data: &[u8]) -> [u8; 20] {
+    let mut ripemd = Ripemd160::new();
+    ripemd.update(data);
+    ripemd.finalize().try_into().expect("Should always succeed")
 }
 
 #[cfg(test)]
@@ -323,6 +342,26 @@ mod tests {
             "xpub6H1LXWLaKsWFhvm6RVpEL9P4KfRZSW7abD2ttkWP3SSQvnyA8FSVqNTEcYFgJS2UaFcxupHiYkro49S8yGasTvXEYBVPamhGW6cFJodrTHy",
             public
         );
+        Ok(())
+    }
+
+    #[test]
+    fn derive_address() -> JsResult<()> {
+        let xprv = "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi";
+        let key: XPrv = xprv.parse()?;
+
+        let path = "m/0'/0/0";
+        let result = key.derive_path(path)?.derive_public()?;
+
+        let serialized_public = result.public_key.serialize();
+        assert_eq!(
+            "027b6a7dd645507d775215a9035be06700e1ed8c541da9351b4bd14bd50ab61428",
+            hex::encode(serialized_public)
+        );
+
+        let address = result.to_address();
+        assert_eq!("1BvgsfsZQVtkLS69NvGF8rw6NZW2ShJQHr", address);
+
         Ok(())
     }
 }
