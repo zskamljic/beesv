@@ -1,4 +1,3 @@
-use util::JsResult;
 use wasm_bindgen::prelude::*;
 use web_sys::window;
 use yew::Renderer;
@@ -14,7 +13,7 @@ mod popup;
 mod util;
 
 #[wasm_bindgen(start)]
-pub fn main() -> JsResult<()> {
+pub fn main() {
     match window()
         .unwrap_throw()
         .document()
@@ -29,6 +28,4 @@ pub fn main() -> JsResult<()> {
             Renderer::<popup::Popup>::new().render();
         }
     };
-
-    Ok(())
 }

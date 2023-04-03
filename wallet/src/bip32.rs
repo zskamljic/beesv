@@ -1,21 +1,30 @@
 use std::str::FromStr;
 
+use anyhow::Result;
 use hmac::{Hmac, Mac};
 use regex::Regex;
 use ripemd::Ripemd160;
 use secp256k1::{PublicKey, Secp256k1, SecretKey};
 use sha2::{Digest, Sha256, Sha512};
-use wasm_bindgen::JsValue;
-
-use crate::util::{map_any_err, JsResult};
+use thiserror::Error;
 
 const HARDENED_INDEX: u32 = 0x80000000;
 
+#[derive(Debug, Error)]
+enum Bip32Error {
+    #[error("Invalid derivation path")]
+    InvalidDerivationPath,
+    #[error("Cannot derive hardened key from public")]
+    PublicHardenedDerivation,
+    #[error("Checksum mismatch")]
+    ChecksumMismatch,
+}
+
 pub trait DerivePath<T> {
-    fn parse_path(path: &str) -> JsResult<Vec<u32>> {
-        let path_regex = Regex::new(r"^m(/\d+'?)+$").map_err(map_any_err)?;
+    fn parse_path(path: &str) -> Result<Vec<u32>> {
+        let path_regex = Regex::new(r"^m(/\d+'?)+$")?;
         if !path_regex.is_match(path) {
-            return Err(JsValue::from_str("Invalid derivation path"));
+            return Err(Bip32Error::InvalidDerivationPath.into());
         }
         Ok(path
             .split('/')
@@ -27,7 +36,7 @@ pub trait DerivePath<T> {
             .collect())
     }
 
-    fn derive_path(&self, path: &str) -> JsResult<T>;
+    fn derive_path(&self, path: &str) -> Result<T>;
 }
 
 #[derive(Debug)]
@@ -50,9 +59,9 @@ impl XPrv {
         }
     }
 
-    pub fn derive(&self, index: u32) -> JsResult<XPrv> {
-        let private_key = SecretKey::from_slice(&self.key).map_err(map_any_err)?;
-        let mut hmac = Hmac::<Sha512>::new_from_slice(&self.chain_code).map_err(map_any_err)?;
+    pub fn derive(&self, index: u32) -> Result<XPrv> {
+        let private_key = SecretKey::from_slice(&self.key)?;
+        let mut hmac = Hmac::<Sha512>::new_from_slice(&self.chain_code)?;
 
         // >= 2³¹ indicates hardned keys
         if index >= HARDENED_INDEX {
@@ -69,10 +78,10 @@ impl XPrv {
         }
         let i = hmac.finalize().into_bytes();
 
-        let secret = SecretKey::from_slice(&i[..32]).map_err(map_any_err)?;
-        let secret = secret.add_tweak(&private_key.into()).map_err(map_any_err)?;
+        let secret = SecretKey::from_slice(&i[..32])?;
+        let secret = secret.add_tweak(&private_key.into())?;
 
-        let chain_code = i[32..].try_into().map_err(map_any_err)?;
+        let chain_code = i[32..].try_into()?;
         Ok(XPrv {
             depth: self.depth + 1,
             child_number: index,
@@ -82,10 +91,8 @@ impl XPrv {
         })
     }
 
-    pub fn derive_public(&self) -> JsResult<XPub> {
-        let public_key = SecretKey::from_slice(&self.key)
-            .map_err(map_any_err)?
-            .public_key(&Secp256k1::new());
+    pub fn derive_public(&self) -> Result<XPub> {
+        let public_key = SecretKey::from_slice(&self.key)?.public_key(&Secp256k1::new());
 
         Ok(XPub {
             depth: self.depth,
@@ -94,23 +101,6 @@ impl XPrv {
             public_key,
             chain_code: self.chain_code,
         })
-    }
-
-    pub fn serialize(&self) -> JsResult<String> {
-        let mut xprv = vec![0x04, 0x88, 0xAD, 0xE4];
-        xprv.push(self.depth);
-        xprv.extend(self.parent_fingerprint);
-        xprv.extend(self.child_number.to_be_bytes());
-        xprv.extend(&self.chain_code);
-        xprv.push(0x0);
-        xprv.extend(&self.key);
-
-        let hashed_xprv = sha256(&xprv);
-        let hashed_xprv = sha256(&hashed_xprv);
-
-        xprv.extend(&hashed_xprv[..4]);
-
-        Ok(bs58::encode(xprv).into_string())
     }
 
     fn fingerprint(&self) -> [u8; 4] {
@@ -124,7 +114,7 @@ impl XPrv {
 }
 
 impl DerivePath<XPrv> for XPrv {
-    fn derive_path(&self, path: &str) -> JsResult<XPrv> {
+    fn derive_path(&self, path: &str) -> Result<XPrv> {
         let path = Self::parse_path(path)?;
 
         let mut key = self.derive(path[0])?;
@@ -135,26 +125,45 @@ impl DerivePath<XPrv> for XPrv {
     }
 }
 
-impl FromStr for XPrv {
-    type Err = JsValue;
+impl TryFrom<&XPrv> for String {
+    type Error = anyhow::Error;
 
-    fn from_str(s: &str) -> JsResult<Self> {
-        let decoded = bs58::decode(s)
-            .into_vec()
-            .map_err(|e| JsValue::from_str(&format!("{e:?}")))?;
+    fn try_from(value: &XPrv) -> Result<Self> {
+        let mut xprv = vec![0x04, 0x88, 0xAD, 0xE4];
+        xprv.push(value.depth);
+        xprv.extend(value.parent_fingerprint);
+        xprv.extend(value.child_number.to_be_bytes());
+        xprv.extend(&value.chain_code);
+        xprv.push(0x0);
+        xprv.extend(&value.key);
+
+        let hashed_xprv = sha256(&xprv);
+        let hashed_xprv = sha256(&hashed_xprv);
+
+        xprv.extend(&hashed_xprv[..4]);
+
+        Ok(bs58::encode(xprv).into_string())
+    }
+}
+
+impl FromStr for XPrv {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        let decoded = bs58::decode(s).into_vec()?;
 
         let checksum = sha256(&sha256(&decoded[..78]));
 
         if decoded[78..] != checksum[..4] {
-            return Err(JsValue::from_str("Checksum mismatch"));
+            return Err(Bip32Error::ChecksumMismatch.into());
         }
 
         Ok(XPrv {
             depth: decoded[4],
-            child_number: u32::from_be_bytes(decoded[9..13].try_into().map_err(map_any_err)?),
-            parent_fingerprint: decoded[5..9].try_into().map_err(map_any_err)?,
-            key: decoded[46..78].try_into().map_err(map_any_err)?,
-            chain_code: decoded[13..45].try_into().map_err(map_any_err)?,
+            child_number: u32::from_be_bytes(decoded[9..13].try_into()?),
+            parent_fingerprint: decoded[5..9].try_into()?,
+            key: decoded[46..78].try_into()?,
+            chain_code: decoded[13..45].try_into()?,
         })
     }
 }
@@ -174,23 +183,21 @@ impl XPub {
         ripemd[..4].try_into().expect("Should always succeed")
     }
 
-    pub fn derive(&self, index: u32) -> JsResult<XPub> {
+    pub fn derive(&self, index: u32) -> Result<XPub> {
         if index >= HARDENED_INDEX {
-            return Err(JsValue::from_str("Cannot derive hardened keys from public"));
+            return Err(Bip32Error::PublicHardenedDerivation.into());
         }
-        let mut hmac = Hmac::<Sha512>::new_from_slice(&self.chain_code).map_err(map_any_err)?;
+        let mut hmac = Hmac::<Sha512>::new_from_slice(&self.chain_code)?;
         let serialized_point = self.public_key.serialize();
         hmac.update(&serialized_point);
         hmac.update(&index.to_be_bytes());
         let i = hmac.finalize().into_bytes();
 
-        let public_key = SecretKey::from_slice(&i[..32])
-            .map_err(map_any_err)?
+        let public_key = SecretKey::from_slice(&i[..32])?
             .public_key(&Secp256k1::new())
-            .combine(&self.public_key)
-            .map_err(map_any_err)?;
+            .combine(&self.public_key)?;
 
-        let chain_code = i[32..].try_into().map_err(map_any_err)?;
+        let chain_code = i[32..].try_into()?;
 
         Ok(XPub {
             depth: self.depth + 1,
@@ -216,11 +223,11 @@ impl XPub {
 }
 
 impl DerivePath<XPub> for XPub {
-    fn derive_path(&self, path: &str) -> JsResult<XPub> {
+    fn derive_path(&self, path: &str) -> Result<XPub> {
         let path = Self::parse_path(path)?;
 
         if path.iter().any(|i| *i >= HARDENED_INDEX) {
-            return Err(JsValue::from_str("Cannot derive hardened keys from public"));
+            return Err(Bip32Error::PublicHardenedDerivation.into());
         }
 
         let mut key = self.derive(path[0])?;
@@ -232,29 +239,29 @@ impl DerivePath<XPub> for XPub {
 }
 
 impl FromStr for XPub {
-    type Err = JsValue;
+    type Err = anyhow::Error;
 
-    fn from_str(s: &str) -> JsResult<Self> {
-        let decoded = bs58::decode(s).into_vec().map_err(map_any_err)?;
+    fn from_str(s: &str) -> Result<Self> {
+        let decoded = bs58::decode(s).into_vec()?;
 
         let checksum = sha256(&sha256(&decoded[..78]));
 
         if decoded[78..] != checksum[..4] {
-            return Err(JsValue::from_str("Checksum mismatch"));
+            return Err(Bip32Error::ChecksumMismatch.into());
         }
 
         Ok(XPub {
             depth: decoded[4],
-            child_number: u32::from_be_bytes(decoded[9..13].try_into().map_err(map_any_err)?),
-            parent_fingerprint: decoded[5..9].try_into().map_err(map_any_err)?,
-            public_key: PublicKey::from_slice(&decoded[45..78]).map_err(map_any_err)?,
-            chain_code: decoded[13..45].try_into().map_err(map_any_err)?,
+            child_number: u32::from_be_bytes(decoded[9..13].try_into()?),
+            parent_fingerprint: decoded[5..9].try_into()?,
+            public_key: PublicKey::from_slice(&decoded[45..78])?,
+            chain_code: decoded[13..45].try_into()?,
         })
     }
 }
 
-impl From<XPub> for String {
-    fn from(value: XPub) -> Self {
+impl From<&XPub> for String {
+    fn from(value: &XPub) -> Self {
         let mut xprv = vec![0x04, 0x88, 0xB2, 0x1E];
         xprv.push(value.depth);
         xprv.extend(value.parent_fingerprint);
@@ -285,18 +292,20 @@ fn ripemd160(data: &[u8]) -> [u8; 20] {
 
 #[cfg(test)]
 mod tests {
-    use crate::{bip32::DerivePath, util::JsResult};
+    use anyhow::Result;
+
+    use crate::bip32::DerivePath;
 
     use super::{XPrv, XPub, HARDENED_INDEX};
 
     #[test]
-    fn derive_hardened_returns_correct() -> JsResult<()> {
+    fn derive_hardened_returns_correct() -> Result<()> {
         let xprv = "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi";
         let key: XPrv = xprv.parse()?;
 
         let derived = key.derive(HARDENED_INDEX + 0)?;
 
-        let serialized: String = derived.serialize()?;
+        let serialized = String::try_from(&derived)?;
         assert_eq!(
             "xprv9uHRZZhk6KAJC1avXpDAp4MDc3sQKNxDiPvvkX8Br5ngLNv1TxvUxt4cV1rGL5hj6KCesnDYUhd7oWgT11eZG7XnxHrnYeSvkzY7d2bhkJ7",
             serialized
@@ -306,13 +315,13 @@ mod tests {
     }
 
     #[test]
-    fn derive_private_returns_correct() -> JsResult<()> {
+    fn derive_private_returns_correct() -> Result<()> {
         let xprv = "xprv9uHRZZhk6KAJC1avXpDAp4MDc3sQKNxDiPvvkX8Br5ngLNv1TxvUxt4cV1rGL5hj6KCesnDYUhd7oWgT11eZG7XnxHrnYeSvkzY7d2bhkJ7";
         let key: XPrv = xprv.parse()?;
 
         let derived = key.derive(1)?;
 
-        let serialized: String = derived.serialize()?;
+        let serialized = String::try_from(&derived)?;
         assert_eq!(
             "xprv9wTYmMFdV23N2TdNG573QoEsfRrWKQgWeibmLntzniatZvR9BmLnvSxqu53Kw1UmYPxLgboyZQaXwTCg8MSY3H2EU4pWcQDnRnrVA1xe8fs",
             serialized
@@ -322,13 +331,13 @@ mod tests {
     }
 
     #[test]
-    fn derive_0h_1_2h() -> JsResult<()> {
+    fn derive_0h_1_2h() -> Result<()> {
         let xprv ="xprv9wTYmMFdV23N2TdNG573QoEsfRrWKQgWeibmLntzniatZvR9BmLnvSxqu53Kw1UmYPxLgboyZQaXwTCg8MSY3H2EU4pWcQDnRnrVA1xe8fs";
         let key: XPrv = xprv.parse()?;
 
         let derived = key.derive(HARDENED_INDEX + 2)?;
 
-        let serialized: String = derived.serialize()?;
+        let serialized = String::try_from(&derived)?;
         assert_eq!(
             "xprv9z4pot5VBttmtdRTWfWQmoH1taj2axGVzFqSb8C9xaxKymcFzXBDptWmT7FwuEzG3ryjH4ktypQSAewRiNMjANTtpgP4mLTj34bhnZX7UiM",
             serialized
@@ -338,13 +347,13 @@ mod tests {
     }
 
     #[test]
-    fn generate_public() -> JsResult<()> {
+    fn generate_public() -> Result<()> {
         let xprv = "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi";
         let key: XPrv = xprv.parse()?;
 
         let public = key.derive_public()?;
 
-        let serialized: String = public.into();
+        let serialized = String::try_from(&public)?;
         assert_eq!(
             "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8",
             serialized
@@ -354,11 +363,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_path_works_direct() -> JsResult<()> {
+    fn parse_path_works_direct() -> Result<()> {
         struct Dummy;
 
         impl DerivePath<Dummy> for Dummy {
-            fn derive_path(&self, _: &str) -> JsResult<Dummy> {
+            fn derive_path(&self, _: &str) -> Result<Dummy> {
                 Ok(Dummy)
             }
         }
@@ -371,11 +380,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_path_works_hardened() -> JsResult<()> {
+    fn parse_path_works_hardened() -> Result<()> {
         struct Dummy;
 
         impl DerivePath<Dummy> for Dummy {
-            fn derive_path(&self, _: &str) -> JsResult<Dummy> {
+            fn derive_path(&self, _: &str) -> Result<Dummy> {
                 Ok(Dummy)
             }
         }
@@ -396,19 +405,20 @@ mod tests {
     }
 
     #[test]
-    fn derive_by_path() -> JsResult<()> {
+    fn derive_by_path() -> Result<()> {
         let xprv = "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi";
         let key: XPrv = xprv.parse()?;
 
         let path = "m/0'/1/2'/2/1000000000";
         let result = key.derive_path(path)?;
 
+        let serialized = String::try_from(&result)?;
         assert_eq!(
             "xprvA41z7zogVVwxVSgdKUHDy1SKmdb533PjDz7J6N6mV6uS3ze1ai8FHa8kmHScGpWmj4WggLyQjgPie1rFSruoUihUZREPSL39UNdE3BBDu76",
-            result.serialize()?
+            serialized
         );
 
-        let public: String = result.derive_public()?.into();
+        let public = String::from(&result.derive_public()?);
         assert_eq!(
             "xpub6H1LXWLaKsWFhvm6RVpEL9P4KfRZSW7abD2ttkWP3SSQvnyA8FSVqNTEcYFgJS2UaFcxupHiYkro49S8yGasTvXEYBVPamhGW6cFJodrTHy",
             public
@@ -417,7 +427,7 @@ mod tests {
     }
 
     #[test]
-    fn derive_address() -> JsResult<()> {
+    fn derive_address() -> Result<()> {
         let xprv = "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi";
         let key: XPrv = xprv.parse()?;
 
@@ -437,12 +447,12 @@ mod tests {
     }
 
     #[test]
-    fn public_key_derives_expected() -> JsResult<()> {
+    fn public_key_derives_expected() -> Result<()> {
         let xpub = "xpub6D4BDPcP2GT577Vvch3R8wDkScZWzQzMMUm3PWbmWvVJrZwQY4VUNgqFJPMM3No2dFDFGTsxxpG5uJh7n7epu4trkrX7x7DogT5Uv6fcLW5";
         let xpub: XPub = xpub.parse()?;
 
         let derived = xpub.derive_path("m/2/1000000000")?;
-        let serialized: String = derived.into();
+        let serialized = String::from(&derived);
 
         assert_eq!(
             "xpub6H1LXWLaKsWFhvm6RVpEL9P4KfRZSW7abD2ttkWP3SSQvnyA8FSVqNTEcYFgJS2UaFcxupHiYkro49S8yGasTvXEYBVPamhGW6cFJodrTHy",

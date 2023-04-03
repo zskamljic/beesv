@@ -1,14 +1,18 @@
 use std::str::FromStr;
 
+use anyhow::Result;
 use hmac::{Hmac, Mac};
 use pbkdf2::pbkdf2_hmac;
 use sha2::Sha512;
-use wasm_bindgen::JsValue;
+use thiserror::Error;
 
-use crate::{
-    bip32::XPrv,
-    util::{map_any_err, JsResult},
-};
+use crate::bip32::XPrv;
+
+#[derive(Debug, Error)]
+enum Bip39Error {
+    #[error("Invalid size")]
+    InvalidSize,
+}
 
 pub struct Seed {
     seed: [u8; 64],
@@ -24,30 +28,26 @@ impl Seed {
         Self { seed }
     }
 
-    pub fn to_xprv(&self) -> JsResult<XPrv> {
+    pub fn to_xprv(&self) -> Result<XPrv> {
         type HmacSha256 = Hmac<Sha512>;
-        let mut hmac = match HmacSha256::new_from_slice(b"Bitcoin seed") {
-            Ok(hmac) => hmac,
-            Err(error) => return Err(JsValue::from_str(&format!("{error:?}"))),
-        };
+        let mut hmac = HmacSha256::new_from_slice(b"Bitcoin seed")?;
         hmac.update(&self.seed);
 
         let seed = hmac.finalize().into_bytes();
 
-        Ok(XPrv::new(
-            seed[..32].try_into().map_err(map_any_err)?,
-            seed[32..].try_into().map_err(map_any_err)?,
-        ))
+        Ok(XPrv::new(seed[..32].try_into()?, seed[32..].try_into()?))
     }
 }
 
 impl FromStr for Seed {
-    type Err = JsValue;
-    fn from_str(value: &str) -> JsResult<Self> {
-        let seed = hex::decode(value)
-            .map_err(|e| JsValue::from_str(&format!("{e:?}")))?
-            .try_into()
-            .map_err(|e| JsValue::from_str(&format!("{e:?}")))?;
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        let seed = hex::decode(value)?;
+        let seed = match seed.try_into() {
+            Ok(seed) => seed,
+            Err(_) => return Err(Bip39Error::InvalidSize.into()),
+        };
 
         Ok(Self { seed })
     }
@@ -55,7 +55,9 @@ impl FromStr for Seed {
 
 #[cfg(test)]
 mod tests {
-    use crate::{bip39::Seed, util::JsResult};
+    use anyhow::Result;
+
+    use crate::bip39::Seed;
 
     #[test]
     fn generate_seed_generates_correct() {
@@ -69,11 +71,11 @@ mod tests {
     }
 
     #[test]
-    fn generate_xprv_returns_correct() -> JsResult<()> {
+    fn generate_xprv_returns_correct() -> Result<()> {
         let seed = "88a6b54bf042d0ba673e497dd283feeca6a1d0fd31cf26d8b7e115f2b3cc92294541855a9c0e74a3c3b87a5aee5adc89faf0702721b6b8af31c0d2b403aba531";
         let seed: Seed = seed.parse()?;
         let xprv = seed.to_xprv()?;
-        let serialized: String = xprv.serialize()?;
+        let serialized = String::try_from(&xprv)?;
 
         assert_eq!(
             "xprv9s21ZrQH143K43iibmycYZ1GRBnkoqG14kHwrGAAkjQTbT3DG5xgizWtvzz49AeozJjUSKf36iWNkRsuFN7PLWo7Kz4AzJqCB1kSHqRhwGE",
