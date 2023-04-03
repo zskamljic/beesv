@@ -1,8 +1,8 @@
 use wasm_bindgen::prelude::*;
 use web_sys::{Event, HtmlInputElement};
-use yew::prelude::*;
+use yew::{platform::spawn_local, prelude::*};
 
-use crate::{bip32::DerivePath, bip39::Seed, util::log};
+use crate::{bip32::DerivePath, bip39::Seed, transactions, util::log};
 
 const WORDS: &str = include_str!("english.txt");
 
@@ -26,13 +26,19 @@ pub fn options() -> Html {
             let public = derived_key
                 .derive_public()
                 .expect("Should create public key");
-            for i in 0..400 {
-                let address = public
-                    .derive(i)
-                    .expect("Derivation of public key should succeed")
-                    .to_address();
-                log(&format!("Address: {address}"));
-            }
+
+            let addresses: Vec<_> = (0..400)
+                .map(|i| {
+                    public
+                        .derive(i)
+                        .expect("Derivation of public key should succeed")
+                        .to_address()
+                })
+                .collect();
+
+            spawn_local(async move {
+                transactions::fetch_for_address(&addresses[..20]).await;
+            });
         }
     };
 

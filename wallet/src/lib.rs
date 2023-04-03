@@ -10,6 +10,7 @@ mod bip32;
 mod bip39;
 mod options;
 mod popup;
+mod transactions;
 mod util;
 
 #[wasm_bindgen(start)]
