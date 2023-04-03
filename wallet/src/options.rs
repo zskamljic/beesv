@@ -22,7 +22,7 @@ pub fn options() -> Html {
         move |_| {
             let seed = Seed::generate(&mnemonic_words.join(" "), "");
             let xprv = seed.to_xprv().expect("Should create a private key");
-            let derived_key = xprv.derive_path("m/0'/0/0").expect("Should derive key");
+            let derived_key = xprv.derive_path("m/0'/0").expect("Should derive key");
             let public = derived_key
                 .derive_public()
                 .expect("Should create public key");
@@ -37,7 +37,7 @@ pub fn options() -> Html {
                 .collect();
 
             spawn_local(async move {
-                transactions::fetch_for_address(&addresses[..20]).await;
+                transactions::fetch_for_address(&addresses).await.unwrap();
             });
         }
     };
