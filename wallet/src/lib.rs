@@ -16,7 +16,13 @@ mod util;
 
 #[wasm_bindgen(start)]
 pub async fn main() {
-    let wallet: Option<String> = util::store_load("test").await.unwrap();
+    let wallet: Option<String> = match util::store_load("dummy").await {
+        Ok(value) => value,
+        Err(error) => {
+            log(&format!("{error:?}"));
+            return;
+        }
+    };
     match wallet {
         Some(value) => log(&value),
         None => log("Wallet not stored"),
