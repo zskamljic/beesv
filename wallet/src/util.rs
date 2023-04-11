@@ -12,9 +12,6 @@ extern "C" {
     #[wasm_bindgen(catch, js_namespace = ["chrome", "storage", "local"], js_name = set)]
     async fn storage_set(data: &JsValue) -> Result<JsValue, JsValue>;
 
-    #[wasm_bindgen(js_namespace = ["chrome", "storage", "local"], js_name = set)]
-    fn storage_set2(data: &JsValue, callback: &js_sys::Function);
-
     #[wasm_bindgen(catch, js_namespace = ["chrome", "storage", "local"], js_name = get)]
     async fn storage_get(data: &JsValue) -> Result<JsValue, JsValue>;
 }
