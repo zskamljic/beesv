@@ -23,11 +23,6 @@ pub async fn main() {
     }
     util::store_save("test", "test").await.unwrap();
 
-    let callback =
-        Closure::wrap(Box::new(move |v| log(&format!("value: {v:?}"))) as Box<dyn FnMut(JsValue)>);
-    util::storage_get2(&JsValue::null(), callback.as_ref().unchecked_ref());
-    callback.forget();
-
     match window()
         .unwrap_throw()
         .document()
