@@ -1,8 +1,9 @@
 use wasm_bindgen::prelude::*;
 use yew::prelude::*;
 
-#[wasm_bindgen(inline_js = "export function open_settings() { chrome.runtime.openOptionsPage(); }")]
+#[wasm_bindgen]
 extern "C" {
+    #[wasm_bindgen(js_namespace = ["chrome", "runtime"], js_name = openOptionsPage)]
     fn open_settings();
 }
 
