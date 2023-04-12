@@ -40,7 +40,10 @@ where
     )
     .map_err(JsError::from)?;
 
-    Ok(())
+    match storage_set(&object).await {
+        Ok(_) => Ok(()),
+        Err(error) => Err(JsError::from(error).into()),
+    }
 }
 
 pub async fn store_load<T>(key: &str) -> Result<Option<T>>

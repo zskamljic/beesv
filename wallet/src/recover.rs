@@ -1,13 +1,22 @@
+use gloo_dialogs::alert;
 use wasm_bindgen::prelude::*;
 use web_sys::{Event, HtmlInputElement};
 use yew::{platform::spawn_local, prelude::*};
 
-use crate::{bip32::DerivePath, bip39::Seed, transactions, util::log};
+use crate::{
+    bip39::Seed,
+    util::{self, log},
+};
 
 const WORDS: &str = include_str!("english.txt");
 
-#[function_component(Options)]
-pub fn options() -> Html {
+#[derive(Properties, PartialEq)]
+pub struct RecoverProps {
+    pub on_recover: Callback<()>,
+}
+
+#[function_component(Recover)]
+pub fn recover(RecoverProps { on_recover }: &RecoverProps) -> Html {
     let mnemonic_words = use_state(|| vec![String::default(); 12]);
     let word_changed = {
         let mnemonic_words = mnemonic_words.clone();
@@ -19,25 +28,18 @@ pub fn options() -> Html {
     };
 
     let recover_clicked = {
+        let on_recover = on_recover.clone();
         move |_| {
+            let on_recover = on_recover.clone();
             let seed = Seed::generate(&mnemonic_words.join(" "), "");
             let xprv = seed.to_xprv().expect("Should create a private key");
-            let derived_key = xprv.derive_path("m/0'/0").expect("Should derive key");
-            let public = derived_key
-                .derive_public()
-                .expect("Should create public key");
-
-            let addresses: Vec<_> = (0..400)
-                .map(|i| {
-                    public
-                        .derive(i)
-                        .expect("Derivation of public key should succeed")
-                        .to_address()
-                })
-                .collect();
-
             spawn_local(async move {
-                transactions::fetch_for_address(&addresses).await.unwrap();
+                let serialized = String::from(&xprv);
+                let Err(error) = util::store_save("xprv", &serialized).await else {
+                    on_recover.emit(());
+                    return;
+                };
+                alert(&format!("Unable to save wallet: {error:?}"));
             });
         }
     };
@@ -175,5 +177,27 @@ fn check_word(input: &HtmlInputElement) {
         log("Showing error");
         input.set_custom_validity("Unrecognized word");
         input.report_validity();
+    }
+}
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = ["chrome", "runtime"], js_name = openOptionsPage)]
+    fn open_settings();
+}
+
+#[function_component(Popup)]
+pub fn popup() -> Html {
+    let open_settings = { move |_| open_settings() };
+
+    html! {
+        <>
+            <header><h1>{"Welcome to BeeSV"}</h1></header>
+            <div class="container">
+                <div class="vertical-center">
+                    <button id="recover" onclick={open_settings}>{"Click here to recover wallet"}</button>
+                </div>
+            </div>
+        </>
     }
 }

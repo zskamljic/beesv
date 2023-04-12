@@ -894,6 +894,7 @@ dependencies = [
  "anyhow",
  "bs58",
  "console_error_panic_hook",
+ "gloo-dialogs",
  "gloo-net",
  "hex",
  "hmac",

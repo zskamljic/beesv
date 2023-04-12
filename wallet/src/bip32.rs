@@ -39,7 +39,7 @@ pub trait DerivePath<T> {
     fn derive_path(&self, path: &str) -> Result<T>;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct XPrv {
     depth: u8,
     child_number: u32,
@@ -125,10 +125,8 @@ impl DerivePath<XPrv> for XPrv {
     }
 }
 
-impl TryFrom<&XPrv> for String {
-    type Error = anyhow::Error;
-
-    fn try_from(value: &XPrv) -> Result<Self> {
+impl From<&XPrv> for String {
+    fn from(value: &XPrv) -> Self {
         let mut xprv = vec![0x04, 0x88, 0xAD, 0xE4];
         xprv.push(value.depth);
         xprv.extend(value.parent_fingerprint);
@@ -142,7 +140,7 @@ impl TryFrom<&XPrv> for String {
 
         xprv.extend(&hashed_xprv[..4]);
 
-        Ok(bs58::encode(xprv).into_string())
+        bs58::encode(xprv).into_string()
     }
 }
 
