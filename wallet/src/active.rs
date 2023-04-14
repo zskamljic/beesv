@@ -3,14 +3,17 @@ use yew::prelude::*;
 
 use crate::bip32::DerivePath;
 use crate::bip32::XPrv;
+use crate::recover::open_settings;
 use crate::transactions;
 
 #[function_component(Popup)]
 pub fn popup() -> Html {
+    let open_settings = { move |_| open_settings() };
+
     html! {
         <>
             <header><h1>{"Welcome to BeeSV"}</h1></header>
-            <div>{"Balance"}</div>
+            <div onclick={open_settings}>{"Balance"}</div>
         </>
     }
 }
@@ -29,23 +32,23 @@ pub fn fullscreen(FullscreenProps { xprv }: &FullscreenProps) -> Html {
         .derive_public()
         .expect("Should create public key");
 
-    let addresses: Vec<_> = (0..400)
-        .map(|i| {
-            public
-                .derive(i)
-                .expect("Derivation of public key should succeed")
-                .to_address()
-        })
-        .collect();
-
-    spawn_local(async move {
-        transactions::fetch_for_address(&addresses).await.unwrap();
-    });
+    let inner_loader = syncing.clone();
+    if *syncing {
+        spawn_local(async move {
+            transactions::fetch_for_address(&public).await.unwrap();
+            inner_loader.set(false);
+        });
+    }
 
     html! {
         <>
             <header><h1>{"Welcome to BeeSV"}</h1></header>
-            {"Welcome!"}
+            {*syncing}
+            if *syncing {
+                <p>{"Syncing"}</p>
+            } else {
+                <p>{"Done syncing"}</p>
+            }
         </>
     }
 }

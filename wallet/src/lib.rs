@@ -13,6 +13,7 @@ static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 mod active;
 mod bip32;
 mod bip39;
+mod ratelimit;
 mod recover;
 mod transactions;
 mod util;

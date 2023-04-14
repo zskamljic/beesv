@@ -183,7 +183,7 @@ fn check_word(input: &HtmlInputElement) {
 #[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(js_namespace = ["chrome", "runtime"], js_name = openOptionsPage)]
-    fn open_settings();
+    pub fn open_settings();
 }
 
 #[function_component(Popup)]

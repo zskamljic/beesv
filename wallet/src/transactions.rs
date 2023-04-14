@@ -4,7 +4,7 @@ use anyhow::Result;
 use gloo_net::http::Request;
 use serde::{Deserialize, Serialize};
 
-use crate::util::log;
+use crate::{bip32::XPub, ratelimit::RateLimiter, util::log};
 
 #[derive(Serialize)]
 struct AddressHistoryRequest {
@@ -22,15 +22,25 @@ struct TransactionInfo {
     tx_hash: String,
 }
 
-pub async fn fetch_for_address(addresses: &[String]) -> Result<()> {
-    let mut last_tx_index = 0;
-    for chunk in addresses.chunks(20) {
-        let transactions = fetch_chunk(chunk).await?;
-        last_tx_index += last_tx_address(chunk, &transactions);
+pub async fn fetch_for_address(xpub: &XPub) -> Result<()> {
+    let mut rate_limiter = RateLimiter::new(3);
+    let mut last_tx_index: u32 = 0;
+    loop {
+        rate_limiter.take().await;
+        let addresses: Vec<_> = (last_tx_index..last_tx_index + 20)
+            .map(|i| {
+                xpub.derive(i)
+                    .expect("Derivation should succeed")
+                    .to_address()
+            })
+            .collect();
+        let transactions = fetch_chunk(&addresses).await?;
+        last_tx_index += last_tx_address(&addresses, &transactions);
         if last_tx_index % 20 != 0 {
             break;
         }
     }
+
     log(&format!("First {last_tx_index} addresses were used"));
 
     Ok(())
@@ -50,7 +60,7 @@ async fn fetch_chunk(chunk: &[String]) -> Result<Vec<AddressHistory>> {
         .map_err(|e| e.into())
 }
 
-fn last_tx_address(chunk: &[String], transactions: &[AddressHistory]) -> usize {
+fn last_tx_address(chunk: &[String], transactions: &[AddressHistory]) -> u32 {
     let transactions_by_address: HashMap<String, Vec<String>> = transactions
         .iter()
         .map(|entry| {
@@ -66,9 +76,9 @@ fn last_tx_address(chunk: &[String], transactions: &[AddressHistory]) -> usize {
         .collect();
     for i in 0..chunk.len() {
         if transactions_by_address[&chunk[i]].is_empty() {
-            return i;
+            return i as u32;
         }
     }
 
-    chunk.len()
+    chunk.len() as u32
 }

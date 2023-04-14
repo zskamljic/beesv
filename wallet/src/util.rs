@@ -3,6 +3,7 @@ use js_sys::{Object, Reflect};
 use serde::{de::DeserializeOwned, Serialize};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
+use web_sys::window;
 
 #[wasm_bindgen]
 extern "C" {
@@ -73,4 +74,13 @@ impl<T> OrError<T> for Option<T> {
             None => Err(JsValue::from_str(message)),
         }
     }
+}
+
+pub fn get_timestamp() -> f64 {
+    let window = window().expect("Unable to get window object");
+    let performance = window
+        .performance()
+        .expect("Unable to get performance object");
+
+    performance.now()
 }
