@@ -166,6 +166,7 @@ impl FromStr for XPrv {
     }
 }
 
+#[derive(Clone)]
 pub struct XPub {
     depth: u8,
     child_number: u32,

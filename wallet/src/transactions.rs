@@ -6,8 +6,88 @@ use serde::{Deserialize, Serialize};
 
 use crate::{bip32::XPub, ratelimit::RateLimiter, util::log};
 
+pub struct WalletState {
+    main: FetchingState,
+    change: FetchingState,
+    pub balance: u64,
+}
+
+pub async fn fetch_for_address(xpub: &XPub, rate_limiter: &mut RateLimiter) -> Result<WalletState> {
+    let xpub_main = xpub.derive(0)?;
+    let xpub_change = xpub.derive(1)?;
+
+    let main = fetch_used_data(xpub_main, rate_limiter).await?;
+    let change = fetch_used_data(xpub_change, rate_limiter).await?;
+
+    let active_addresses: Vec<_> = main
+        .active_addresses
+        .iter()
+        .cloned()
+        .chain(change.active_addresses.iter().cloned())
+        .collect();
+
+    let mut balance = 0u64;
+    for chunk in active_addresses.chunks(20) {
+        rate_limiter.take().await;
+        let unspent_outputs = fetch_unspent_outputs(chunk).await?;
+        balance += unspent_outputs
+            .iter()
+            .flat_map(|r| r.unspent.iter())
+            .map(|o| o.value)
+            .sum::<u64>();
+    }
+    log(&format!("Balance: {balance}"));
+
+    Ok(WalletState {
+        main,
+        change,
+        balance,
+    })
+}
+
+struct FetchingState {
+    xpub: XPub,
+    last_index: u32,
+    active_addresses: Vec<String>,
+    transactions: Vec<String>,
+}
+
+async fn fetch_used_data(xpub: XPub, rate_limiter: &mut RateLimiter) -> Result<FetchingState> {
+    let mut last_index: u32 = 0;
+    let mut transactions = vec![];
+    let mut active_addresses = vec![];
+    loop {
+        rate_limiter.take().await;
+        let addresses: Vec<_> = (last_index..last_index + 20)
+            .map(|i| {
+                xpub.derive(i)
+                    .expect("Derivation should succeed")
+                    .to_address()
+            })
+            .collect();
+        active_addresses.extend(addresses.clone());
+        let history = fetch_transactions_for_addresses(&addresses).await?;
+        history
+            .iter()
+            .flat_map(|a| a.history.iter())
+            .map(|t| t.tx_hash.to_owned())
+            .for_each(|t| transactions.push(t));
+
+        last_index += last_tx_address(&addresses, &history);
+        if last_index % 20 != 0 {
+            break;
+        }
+    }
+    Ok(FetchingState {
+        xpub,
+        last_index,
+        active_addresses,
+        transactions,
+    })
+}
+
 #[derive(Serialize)]
-struct AddressHistoryRequest {
+struct AddressRequest {
     addresses: Vec<String>,
 }
 
@@ -22,43 +102,8 @@ struct TransactionInfo {
     tx_hash: String,
 }
 
-pub async fn fetch_for_address(xpub: &XPub) -> Result<Vec<String>> {
-    let mut transactions = vec![];
-    let mut rate_limiter = RateLimiter::new(3);
-    let mut last_tx_index: u32 = 0;
-    loop {
-        rate_limiter.take().await;
-        let addresses: Vec<_> = (last_tx_index..last_tx_index + 20)
-            .map(|i| {
-                xpub.derive(i)
-                    .expect("Derivation should succeed")
-                    .to_address()
-            })
-            .collect();
-        let history = fetch_transactions_for_addresses(&addresses).await?;
-        history
-            .iter()
-            .flat_map(|a| a.history.iter())
-            .map(|t| t.tx_hash.to_owned())
-            .for_each(|t| transactions.push(t));
-
-        last_tx_index += last_tx_address(&addresses, &history);
-        if last_tx_index % 20 != 0 {
-            break;
-        }
-    }
-
-    for chunk in transactions.chunks(20) {
-        rate_limiter.take().await;
-        let raw_transactions = fetch_raw_transactions(chunk).await?;
-        log(&format!("Raw transactions: {raw_transactions:?}"));
-    }
-
-    Ok(transactions)
-}
-
 async fn fetch_transactions_for_addresses(chunk: &[String]) -> Result<Vec<AddressHistory>> {
-    let body = serde_json::to_string(&AddressHistoryRequest {
+    let body = serde_json::to_string(&AddressRequest {
         addresses: chunk.to_vec(),
     })?;
     Request::post("https://api.whatsonchain.com/v1/bsv/main/addresses/history")
@@ -114,6 +159,34 @@ async fn fetch_raw_transactions(hashes: &[String]) -> Result<Vec<RawTransaction>
     })?;
 
     Request::post("https://api.whatsonchain.com/v1/bsv/main/txs/hex")
+        .body(body)
+        .send()
+        .await?
+        .json()
+        .await
+        .map_err(|e| e.into())
+}
+
+#[derive(Debug, Deserialize)]
+struct UtxoResponse {
+    address: String,
+    unspent: Vec<UnspentOutput>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UnspentOutput {
+    height: u64,
+    tx_pos: u32,
+    tx_hash: String,
+    value: u64,
+}
+
+async fn fetch_unspent_outputs(addresses: &[String]) -> Result<Vec<UtxoResponse>> {
+    let body = serde_json::to_string(&AddressRequest {
+        addresses: addresses.iter().cloned().collect(),
+    })?;
+
+    Request::post("https://api.whatsonchain.com/v1/bsv/main/addresses/unspent")
         .body(body)
         .send()
         .await?
