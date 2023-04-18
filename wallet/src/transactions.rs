@@ -36,7 +36,6 @@ pub async fn fetch_for_address(xpub: &XPub, rate_limiter: &mut RateLimiter) -> R
             .map(|o| o.value)
             .sum::<u64>();
     }
-    log(&format!("Balance: {balance}"));
 
     Ok(WalletState {
         main,
@@ -155,7 +154,7 @@ struct RawTransaction {
 
 async fn fetch_raw_transactions(hashes: &[String]) -> Result<Vec<RawTransaction>> {
     let body = serde_json::to_string(&RawTransactionRequest {
-        txids: hashes.iter().cloned().collect(),
+        txids: hashes.to_vec(),
     })?;
 
     Request::post("https://api.whatsonchain.com/v1/bsv/main/txs/hex")
@@ -183,7 +182,7 @@ struct UnspentOutput {
 
 async fn fetch_unspent_outputs(addresses: &[String]) -> Result<Vec<UtxoResponse>> {
     let body = serde_json::to_string(&AddressRequest {
-        addresses: addresses.iter().cloned().collect(),
+        addresses: addresses.to_vec(),
     })?;
 
     Request::post("https://api.whatsonchain.com/v1/bsv/main/addresses/unspent")
