@@ -1,6 +1,8 @@
 use anyhow::Result;
 use js_sys::{Object, Reflect};
+use ripemd::Ripemd160;
 use serde::{de::DeserializeOwned, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 use web_sys::window;
@@ -83,4 +85,20 @@ pub fn get_timestamp() -> f64 {
         .expect("Unable to get performance object");
 
     performance.now()
+}
+
+pub fn double_sha256(data: &[u8]) -> [u8; 32] {
+    sha256(&sha256(data))
+}
+
+pub fn sha256(data: &[u8]) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(data);
+    hash.finalize().into()
+}
+
+pub fn ripemd160(data: &[u8]) -> [u8; 20] {
+    let mut ripemd = Ripemd160::new();
+    ripemd.update(data);
+    ripemd.finalize().try_into().expect("Should always succeed")
 }

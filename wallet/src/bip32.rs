@@ -3,10 +3,13 @@ use std::str::FromStr;
 use anyhow::Result;
 use hmac::{Hmac, Mac};
 use regex::Regex;
-use ripemd::Ripemd160;
 use secp256k1::{PublicKey, Secp256k1, SecretKey};
-use sha2::{Digest, Sha256, Sha512};
+use sha2::Sha512;
 use thiserror::Error;
+
+use crate::util::double_sha256;
+use crate::util::ripemd160;
+use crate::util::sha256;
 
 const HARDENED_INDEX: u32 = 0x80000000;
 
@@ -135,8 +138,7 @@ impl From<&XPrv> for String {
         xprv.push(0x0);
         xprv.extend(&value.key);
 
-        let hashed_xprv = sha256(&xprv);
-        let hashed_xprv = sha256(&hashed_xprv);
+        let hashed_xprv = double_sha256(&xprv);
 
         xprv.extend(&hashed_xprv[..4]);
 
@@ -275,18 +277,6 @@ impl From<&XPub> for String {
 
         bs58::encode(xprv).into_string()
     }
-}
-
-fn sha256(data: &[u8]) -> [u8; 32] {
-    let mut hash = Sha256::new();
-    hash.update(data);
-    hash.finalize().into()
-}
-
-fn ripemd160(data: &[u8]) -> [u8; 20] {
-    let mut ripemd = Ripemd160::new();
-    ripemd.update(data);
-    ripemd.finalize().try_into().expect("Should always succeed")
 }
 
 #[cfg(test)]
