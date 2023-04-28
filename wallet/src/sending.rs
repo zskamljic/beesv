@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Debug};
+use std::{collections::HashMap, fmt::Debug, hash::Hash};
 
 use anyhow::Result;
 use secp256k1::{ecdsa::Signature, KeyPair, PublicKey, Secp256k1};
@@ -11,8 +11,8 @@ struct SigHash {
 }
 
 impl SigHash {
-    fn base(&self) -> SigHash {
-        Self {
+    fn base(&self) -> BaseSigHash {
+        BaseSigHash {
             value: self.value & 0x1F,
         }
     }
@@ -35,6 +35,24 @@ impl SigHash {
 
     fn has_anyone_can_pay(&self) -> bool {
         self.value & 0x80 == 0x80
+    }
+}
+
+struct BaseSigHash {
+    value: u32,
+}
+
+impl BaseSigHash {
+    fn has_all(&self) -> bool {
+        self.value == 0x01
+    }
+
+    fn has_none(&self) -> bool {
+        self.value == 0x02
+    }
+
+    fn has_single(&self) -> bool {
+        self.value == 0x03
     }
 }
 
@@ -239,13 +257,12 @@ impl Transaction {
         let prevouts_hash = if sig_hash.has_anyone_can_pay() {
             [0u8; 32]
         } else {
-            //let previous_outputs: Vec<_> = self
-            //    .inputs
-            //    .iter()
-            //    .flat_map(|i| i.address.iter().cloned().chain(i.index.to_le_bytes()))
-            //    .collect();
-            //preimage.extend(double_sha256(&previous_outputs));
-            todo!("Not supported yet");
+            let previous_outputs: Vec<_> = self
+                .inputs
+                .iter()
+                .flat_map(|i| i.tx_hash.iter().rev().cloned().chain(i.index.to_le_bytes()))
+                .collect();
+            double_sha256(&previous_outputs)
         };
         preimage.extend(prevouts_hash);
 
@@ -308,11 +325,19 @@ impl Transaction {
         if base_sig.has_none() {
             current_signing.outputs.clear();
         } else if base_sig.has_single() {
-            todo!("Unsupported: {}", base_sig.value);
+            for i in 0..current_signing.outputs.len() {
+                if i != index {
+                    current_signing.outputs[i] = Output {
+                        amount: u64::MAX,
+                        script: vec![],
+                    }
+                }
+            }
         }
 
         let mut serialized = Vec::from(&current_signing);
         serialized.extend(sig_hash.value.to_le_bytes());
+        println!("Serialized: {}", hex::encode(&serialized).to_string());
         Ok(double_sha256(&serialized))
     }
 
@@ -531,6 +556,7 @@ mod tests {
         let json_file = File::open("../tests/sigtest.json")?;
         let inputs: Vec<TestInput> = serde_json::from_reader(json_file)?;
 
+        let mut successful = 1;
         for input in inputs {
             let (raw_tx, raw_script, index, sig_hash, sig_hash_reg_hex, sig_hash_old_hex) = input;
 
@@ -539,19 +565,37 @@ mod tests {
             let transaction: Transaction = hex::decode(raw_tx)?.try_into()?;
 
             let script = hex::decode(raw_script)?;
-            let sig_hash_regular = transaction.hash_fork(index, &script, &sig_hash, 0)?;
+            let sig_hash_regular =
+                signature_hash(&transaction, index, &script, &sig_hash, 0, true)?;
             assert_eq!(
                 sig_hash_reg_hex,
                 hex::encode(sig_hash_regular.into_iter().rev().collect::<Vec<u8>>())
             );
 
-            let sig_hash_old = transaction.hash_original(index, &script, &sig_hash)?;
+            let sig_hash_old = signature_hash(&transaction, index, &script, &sig_hash, 0, false)?;
             assert_eq!(
                 sig_hash_old_hex,
                 hex::encode(sig_hash_old.into_iter().rev().collect::<Vec<u8>>())
             );
+            println!("Successful: {successful}");
+            successful += 1;
         }
 
         Ok(())
+    }
+
+    fn signature_hash(
+        transaction: &Transaction,
+        index: usize,
+        script: &[u8],
+        sig_hash: &SigHash,
+        amount: u64,
+        enable_fork: bool,
+    ) -> Result<[u8; 32]> {
+        if enable_fork {
+            transaction.hash_fork(index, script, sig_hash, amount)
+        } else {
+            transaction.hash_original(index, script, sig_hash)
+        }
     }
 }
