@@ -15,6 +15,7 @@ mod bip32;
 mod bip39;
 mod ratelimit;
 mod recover;
+mod script;
 mod sending;
 mod transactions;
 mod util;
