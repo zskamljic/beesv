@@ -113,8 +113,8 @@ impl Debug for Input {
         source.extend(&checksum[..4]);
 
         let address = bs58::encode(source).into_string();
-        let tx_hash: Vec<_> = self.tx_hash.iter().cloned().collect();
-        let tx_hash = hex::encode(&tx_hash);
+        let tx_hash: Vec<_> = self.tx_hash.to_vec();
+        let tx_hash = hex::encode(tx_hash);
         let script_sig = hex::encode(&self.script_sig);
 
         write!(
@@ -232,7 +232,7 @@ impl Transaction {
             let signature = &input.script_sig[1..signature_length];
             let signature = Signature::from_der(signature)?;
             let pub_key = &input.script_sig[signature_length + 2..];
-            let pub_key = PublicKey::from_slice(&pub_key)?;
+            let pub_key = PublicKey::from_slice(pub_key)?;
             //secp.verify_ecdsa(&message, &signature, &pub_key)?;
             println!("Input valid");
         }
@@ -293,7 +293,7 @@ impl Transaction {
         let outputs_hash = if sig_hash.base().has_single() && index < self.outputs.len() {
             double_sha256(&Vec::from(&self.outputs[index]))
         } else if !sig_hash.base().has_single() && !sig_hash.base().has_none() {
-            let outputs: Vec<_> = self.outputs.iter().flat_map(|o| Vec::from(o)).collect();
+            let outputs: Vec<_> = self.outputs.iter().flat_map(Vec::from).collect();
             double_sha256(&outputs)
         } else {
             [0u8; 32]
@@ -304,7 +304,6 @@ impl Transaction {
         preimage.extend(self.locktime.to_le_bytes());
         preimage.extend(sig_hash.value.to_le_bytes());
 
-        println!("Preimage: {}", hex::encode(&preimage).to_string());
         Ok(double_sha256(&preimage))
     }
 
@@ -352,7 +351,6 @@ impl Transaction {
 
         let mut serialized = Vec::from(&current_signing);
         serialized.extend(sig_hash.value.to_le_bytes());
-        println!("Serialized: {}", hex::encode(&serialized).to_string());
         Ok(double_sha256(&serialized))
     }
 
@@ -444,7 +442,7 @@ impl TryFrom<Vec<u8>> for Transaction {
         let locktime: Vec<_> = transaction.drain(0..4).collect();
         let locktime = u32::from_le_bytes(locktime[..].try_into()?);
 
-        if transaction.len() > 0 {
+        if !transaction.is_empty() {
             return Err(DeserializeError::LeftoverData(transaction).into());
         }
 
@@ -479,7 +477,7 @@ fn read_var_int(input: &mut Vec<u8>) -> Result<u64> {
 }
 
 fn encode_compact_size(input: u64) -> Vec<u8> {
-    return if input <= 252 {
+    if input <= 252 {
         vec![input as u8]
     } else if input <= 0xFFFF {
         let mut output = vec![0xFD];
@@ -493,7 +491,7 @@ fn encode_compact_size(input: u64) -> Vec<u8> {
         let mut output = vec![0xFF];
         output.extend(input.to_le_bytes());
         output
-    };
+    }
 }
 
 #[cfg(test)]
@@ -571,7 +569,6 @@ mod tests {
         let json_file = File::open("../tests/sigtest.json")?;
         let inputs: Vec<TestInput> = serde_json::from_reader(json_file)?;
 
-        let mut successful = 1;
         for input in inputs {
             let (raw_tx, raw_script, index, sig_hash, sig_hash_reg_hex, sig_hash_old_hex) = input;
 
@@ -592,8 +589,6 @@ mod tests {
                 sig_hash_old_hex,
                 hex::encode(sig_hash_old.into_iter().rev().collect::<Vec<u8>>())
             );
-            println!("Successful: {successful}");
-            successful += 1;
         }
 
         Ok(())

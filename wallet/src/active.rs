@@ -37,7 +37,6 @@ pub fn fullscreen(FullscreenProps { xprv }: &FullscreenProps) -> Html {
         .derive_public()
         .expect("Should create public key");
 
-    let public = public.clone();
     let loader = syncing.clone();
     let balance_state = balance.clone();
     use_interval(
@@ -57,15 +56,13 @@ pub fn fullscreen(FullscreenProps { xprv }: &FullscreenProps) -> Html {
 }
 
 fn trigger_sync(xpub: XPub, loader: UseStateHandle<bool>, balance: UseStateHandle<u64>) {
-    if *loader.clone() {
+    if *loader {
         return;
     }
 
     loader.set(true);
 
     let mut rate_limiter = RateLimiter::new(3);
-    let balance = balance.clone();
-    let loader = loader.clone();
     spawn_local(async move {
         let result = transactions::fetch_for_address(&xpub, &mut rate_limiter)
             .await
