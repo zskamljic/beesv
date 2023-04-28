@@ -290,12 +290,21 @@ impl Transaction {
         preimage.extend(amount.to_le_bytes());
         preimage.extend(self.inputs[index].sequence.to_le_bytes());
 
-        let outputs: Vec<_> = self.outputs.iter().flat_map(|o| Vec::from(o)).collect();
-        preimage.extend(double_sha256(&outputs));
+        let outputs_hash = if sig_hash.base().has_single() && index < self.outputs.len() {
+            double_sha256(&Vec::from(&self.outputs[index]))
+        } else if !sig_hash.base().has_single() && !sig_hash.base().has_none() {
+            let outputs: Vec<_> = self.outputs.iter().flat_map(|o| Vec::from(o)).collect();
+            double_sha256(&outputs)
+        } else {
+            [0u8; 32]
+        };
+
+        preimage.extend(outputs_hash);
 
         preimage.extend(self.locktime.to_le_bytes());
         preimage.extend(sig_hash.value.to_le_bytes());
 
+        println!("Preimage: {}", hex::encode(&preimage).to_string());
         Ok(double_sha256(&preimage))
     }
 
@@ -305,10 +314,15 @@ impl Transaction {
         }
 
         let mut current_signing = self.clone();
-        current_signing
-            .inputs
-            .iter_mut()
-            .for_each(|i| i.script_sig.clear());
+        for i in 0..current_signing.inputs.len() {
+            if i == index {
+                continue;
+            }
+            current_signing.inputs[i].script_sig.clear();
+            if sig_hash.base().has_single() || sig_hash.base().has_none() {
+                current_signing.inputs[i].sequence = 0;
+            }
+        }
         current_signing.inputs[index].script_sig = script
             .iter()
             .cloned()
@@ -325,6 +339,7 @@ impl Transaction {
         if base_sig.has_none() {
             current_signing.outputs.clear();
         } else if base_sig.has_single() {
+            current_signing.outputs = current_signing.outputs[..index + 1].to_vec();
             for i in 0..current_signing.outputs.len() {
                 if i != index {
                     current_signing.outputs[i] = Output {
