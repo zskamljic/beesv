@@ -170,30 +170,6 @@ struct RawTransactionRequest {
 }
 
 #[derive(Debug, Deserialize)]
-struct RawTransaction {
-    txid: String,
-    hex: String,
-    blockhash: String,
-    blockheight: u64,
-    blocktime: u64,
-    confirmations: u64,
-}
-
-async fn fetch_raw_transactions(hashes: &[String]) -> Result<Vec<RawTransaction>> {
-    let body = serde_json::to_string(&RawTransactionRequest {
-        txids: hashes.to_vec(),
-    })?;
-
-    Request::post("https://api.whatsonchain.com/v1/bsv/main/txs/hex")
-        .body(body)
-        .send()
-        .await?
-        .json()
-        .await
-        .map_err(|e| e.into())
-}
-
-#[derive(Debug, Deserialize)]
 struct UtxoResponse {
     unspent: Vec<UnspentOutput>,
 }
