@@ -21,8 +21,8 @@ impl WalletState {
 }
 
 pub async fn fetch_for_address(xprv: &XPrv, rate_limiter: &mut RateLimiter) -> Result<WalletState> {
-    let xprv_main = xprv.derive(0)?;
-    let xprv_change = xprv.derive(1)?;
+    let xprv_main = xprv.derive(0);
+    let xprv_change = xprv.derive(1);
 
     let main = fetch_used_data(xprv_main, rate_limiter).await?;
     let change = fetch_used_data(xprv_change, rate_limiter).await?;
@@ -83,12 +83,7 @@ async fn fetch_used_data(xprv: XPrv, rate_limiter: &mut RateLimiter) -> Result<F
     loop {
         rate_limiter.take().await;
         let addresses: Vec<_> = (last_index..last_index + 20)
-            .map(|i| {
-                xprv.derive(i)
-                    .expect("Derivation should succeed")
-                    .derive_public()
-                    .to_address()
-            })
+            .map(|i| xprv.derive(i).derive_public().to_address())
             .collect();
         active_addresses.extend(addresses.clone());
         let history = fetch_transactions_for_addresses(&addresses).await?;

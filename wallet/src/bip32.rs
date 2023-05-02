@@ -72,8 +72,8 @@ impl XPrv {
         })
     }
 
-    pub fn derive(&self, index: u32) -> Result<XPrv> {
-        let mut hmac = Hmac::<Sha512>::new_from_slice(&self.chain_code)?;
+    pub fn derive(&self, index: u32) -> XPrv {
+        let mut hmac = Hmac::<Sha512>::new_from_slice(&self.chain_code).expect("Size is fixed");
 
         // >= 2³¹ indicates hardned keys
         if index >= HARDENED_INDEX {
@@ -90,17 +90,21 @@ impl XPrv {
         }
         let i = hmac.finalize().into_bytes();
 
-        let secret = SecretKey::from_slice(&i[..32])?;
-        let secret = secret.add_tweak(&self.key.into())?;
+        let secret = SecretKey::from_slice(&i[..32]).expect("Secret key could not be constructed");
+        let secret = secret
+            .add_tweak(&self.key.into())
+            .expect("Tweak must always be correct");
 
-        let chain_code = i[32..].try_into()?;
-        Ok(XPrv {
+        let chain_code = i[32..]
+            .try_into()
+            .expect("Fixed size should always succeed");
+        XPrv {
             depth: self.depth + 1,
             child_number: index,
             parent_fingerprint: self.fingerprint(),
             key: secret,
             chain_code,
-        })
+        }
     }
 
     pub fn derive_public(&self) -> XPub {
@@ -113,6 +117,10 @@ impl XPrv {
             public_key,
             chain_code: self.chain_code,
         }
+    }
+
+    pub fn to_keypair(&self) -> (SecretKey, PublicKey) {
+        (self.key, PublicKey::from_secret_key_global(&self.key))
     }
 
     fn fingerprint(&self) -> [u8; 4] {
@@ -128,9 +136,9 @@ impl DerivePath<XPrv> for XPrv {
     fn derive_path(&self, path: &str) -> Result<XPrv> {
         let path = Self::parse_path(path)?;
 
-        let mut key = self.derive(path[0])?;
+        let mut key = self.derive(path[0]);
         for item in path.iter().skip(1) {
-            key = key.derive(*item)?;
+            key = key.derive(*item);
         }
         Ok(key)
     }
@@ -299,7 +307,7 @@ mod tests {
         let xprv = "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi";
         let key: XPrv = xprv.parse()?;
 
-        let derived = key.derive(HARDENED_INDEX + 0)?;
+        let derived = key.derive(HARDENED_INDEX + 0);
 
         let serialized = String::try_from(&derived)?;
         assert_eq!(
@@ -315,7 +323,7 @@ mod tests {
         let xprv = "xprv9uHRZZhk6KAJC1avXpDAp4MDc3sQKNxDiPvvkX8Br5ngLNv1TxvUxt4cV1rGL5hj6KCesnDYUhd7oWgT11eZG7XnxHrnYeSvkzY7d2bhkJ7";
         let key: XPrv = xprv.parse()?;
 
-        let derived = key.derive(1)?;
+        let derived = key.derive(1);
 
         let serialized = String::try_from(&derived)?;
         assert_eq!(
@@ -331,7 +339,7 @@ mod tests {
         let xprv ="xprv9wTYmMFdV23N2TdNG573QoEsfRrWKQgWeibmLntzniatZvR9BmLnvSxqu53Kw1UmYPxLgboyZQaXwTCg8MSY3H2EU4pWcQDnRnrVA1xe8fs";
         let key: XPrv = xprv.parse()?;
 
-        let derived = key.derive(HARDENED_INDEX + 2)?;
+        let derived = key.derive(HARDENED_INDEX + 2);
 
         let serialized = String::try_from(&derived)?;
         assert_eq!(
