@@ -170,6 +170,14 @@ impl Output {
         Ok(Self { amount, script })
     }
 
+    pub fn new_from_decoded(amount: u64, address: [u8; 20]) -> Self {
+        let mut script = vec![0x76, 0xA9, 0x14];
+        script.extend(address);
+        script.extend([0x88, 0xAC]);
+
+        Self { amount, script }
+    }
+
     fn address(&self) -> Result<[u8; 20]> {
         if self.script.len() != 25
             || self.script[0] != 0x76

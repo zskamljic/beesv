@@ -1,4 +1,8 @@
+use std::collections::HashMap;
+
 use gloo_dialogs::alert;
+use secp256k1::PublicKey;
+use secp256k1::SecretKey;
 use web_sys::HtmlInputElement;
 use yew::platform::spawn_local;
 use yew::prelude::*;
@@ -58,7 +62,7 @@ pub fn fullscreen(FullscreenProps { xprv }: &FullscreenProps) -> Html {
                 <p>{"Synced"}</p>
             }
             <p>{"Send BSV"}</p>
-            <SendToAddress outputs={state.unspent_outputs.to_vec()} change_address={state.change_address()} />
+            <SendToAddress outputs={state.unspent_outputs.to_vec()} change_address={state.change_address()} key_fetcher={state.address_keys()} />
         </>
     }
 }
@@ -84,6 +88,7 @@ fn trigger_sync(xprv: XPrv, loader: UseStateHandle<bool>, state: UseStateHandle<
 struct SendToAddressProps {
     outputs: Vec<RichOutput>,
     change_address: String,
+    key_fetcher: HashMap<[u8; 20], (SecretKey, PublicKey)>,
 }
 
 #[function_component(SendToAddress)]
@@ -91,6 +96,7 @@ fn send_to_address(
     SendToAddressProps {
         outputs,
         change_address,
+        key_fetcher,
     }: &SendToAddressProps,
 ) -> Html {
     let address = use_state(|| String::default());
@@ -116,6 +122,7 @@ fn send_to_address(
     let send_transaction = {
         let outputs = outputs.clone();
         let change_address = change_address.clone();
+        let key_fetcher = key_fetcher.clone();
         move |_| {
             if address.is_empty() {
                 alert("Address was not present");
@@ -136,6 +143,16 @@ fn send_to_address(
             };
             transaction.add_output(output);
 
+            let output_map = outputs
+                .iter()
+                .cloned()
+                .map(|o| {
+                    (
+                        (hex::decode(o.tx_hash).unwrap(), o.tx_pos),
+                        Output::new_from_decoded(o.amount, o.address),
+                    )
+                })
+                .collect();
             let mut outputs = outputs.clone();
             let mut output_sum = 0;
             while output_sum < amount && !outputs.is_empty() {
@@ -181,6 +198,10 @@ fn send_to_address(
                 }
             };
             transaction.add_output(change);
+            if let Err(error) = transaction.sign_inputs(&output_map, &key_fetcher) {
+                alert(&format!("Unable to sign transaction: {error:?}"));
+                return;
+            }
 
             log(&format!(
                 "Transaction: {}, fee: {}",
