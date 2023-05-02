@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fmt::Debug, hash::Hash};
 
 use anyhow::Result;
-use secp256k1::{ecdsa::Signature, KeyPair, PublicKey, Secp256k1};
+use secp256k1::{ecdsa::Signature, KeyPair, Message, PublicKey, Secp256k1};
 use thiserror::Error;
 
 use crate::{script, util::double_sha256};
@@ -68,6 +68,8 @@ impl From<i32> for SigHash {
 enum SignatureError {
     #[error("Input out of bounds: {0}/{1}")]
     InputOutOfBounds(usize, usize),
+    #[error("Missing previous input for {0}:{1}")]
+    MissingInput(String, u32),
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -75,7 +77,6 @@ struct Input {
     tx_hash: Vec<u8>,
     index: u32,
     script_sig: Vec<u8>,
-    //sig_type: u8,
     sequence: u32,
 }
 
@@ -106,21 +107,14 @@ impl Input {
 
 impl Debug for Input {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut source = vec![0x00];
-        //source.extend(self.address);
-
-        let checksum = double_sha256(&source);
-        source.extend(&checksum[..4]);
-
-        let address = bs58::encode(source).into_string();
         let tx_hash: Vec<_> = self.tx_hash.to_vec();
         let tx_hash = hex::encode(tx_hash);
         let script_sig = hex::encode(&self.script_sig);
 
         write!(
             f,
-            "Input {{ address: {address}, tx_hash: {tx_hash}, index: {}, script_sig: {script_sig} }}",
-            self.index, //self.sig_type
+            "Input {{ tx_hash: {tx_hash}, index: {}, script_sig: {script_sig} }}",
+            self.index,
         )
     }
 }
@@ -175,7 +169,7 @@ struct Transaction {
 }
 
 impl Transaction {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             version: 1,
             inputs: vec![],
@@ -184,15 +178,15 @@ impl Transaction {
         }
     }
 
-    fn add_input(&mut self, input: Input) {
+    pub fn add_input(&mut self, input: Input) {
         self.inputs.push(input);
     }
 
-    fn add_output(&mut self, output: Output) {
+    pub fn add_output(&mut self, output: Output) {
         self.outputs.push(output);
     }
 
-    fn sign_inputs(&mut self, address_keys: HashMap<[u8; 20], KeyPair>) {
+    pub fn sign_inputs(&mut self, address_keys: HashMap<[u8; 20], KeyPair>) {
         let mut copy = self.clone();
         copy.inputs.iter_mut().for_each(|i| i.script_sig.clear());
 
@@ -210,30 +204,36 @@ impl Transaction {
             //    secp.sign_ecdsa(&Message::from_slice(&hash).unwrap(), &keypair.secret_key());
             //let mut script_sig = result.serialize_der().to_vec();
             //script_sig.push(SIGHASH_ALL | SIGHASH_FORKID);
-            // script_sig.extend(keypair.public_key().serialize());
+            //script_sig.extend(keypair.public_key().serialize());
             //self.inputs[i].script_sig = script_sig;
         }
     }
 
-    fn verify(&self) -> Result<()> {
-        let secp = Secp256k1::new();
-        let mut copy = self.clone();
-        copy.inputs.iter_mut().for_each(|i| i.script_sig.clear());
-
+    pub fn verify(&self, outputs: &HashMap<(Vec<u8>, u32), Output>) -> Result<()> {
         for i in 0..self.inputs.len() {
-            //let message = if self.inputs[i].sig_type & SIGHASH_FORKID != 0 {
-            //    self.hash_fork(i)?
-            //} else {
-            //let message = self.hash_original(i, &secp, copy.clone())?;
-            //};
-
             let input = &self.inputs[i];
             let signature_length = input.script_sig[0] as usize;
             let signature = &input.script_sig[1..signature_length];
             let signature = Signature::from_der(signature)?;
             let pub_key = &input.script_sig[signature_length + 2..];
             let pub_key = PublicKey::from_slice(pub_key)?;
-            //secp.verify_ecdsa(&message, &signature, &pub_key)?;
+
+            let sig_hash = SigHash {
+                value: input.script_sig[signature_length] as u32,
+            };
+            let output = outputs.get(&(input.tx_hash.clone(), input.index)).ok_or(
+                SignatureError::MissingInput(hex::encode(&input.tx_hash), input.index),
+            )?;
+            let script = &output.script;
+            let message = if sig_hash.has_fork_id() {
+                self.hash_fork(i, script, &sig_hash, output.amount)?
+            } else {
+                self.hash_original(i, script, &sig_hash)?
+            };
+            let message = Message::from_slice(&message)?;
+
+            let secp = Secp256k1::new();
+            secp.verify_ecdsa(&message, &signature, &pub_key)?;
             println!("Input valid");
         }
 
@@ -382,10 +382,6 @@ impl From<&Transaction> for Vec<u8> {
 
 #[derive(Error, Debug)]
 enum DeserializeError {
-    #[error("Invalid transaction version")]
-    InvalidVersion,
-    #[error("Invalid signature script")]
-    InvalidSignatureScript,
     #[error("Leftover data after parsing: {0:?}")]
     LeftoverData(Vec<u8>),
 }
@@ -406,15 +402,6 @@ impl TryFrom<Vec<u8>> for Transaction {
             let index = u32::from_le_bytes(index[..].try_into()?);
             let script_len = read_var_int(&mut transaction)? as usize;
             let script_sig: Vec<_> = transaction.drain(0..script_len).collect();
-
-            //let signature_length = script_sig[0] as usize + 1;
-            //let key_length = script_sig[signature_length];
-            //if key_length != 33 {
-            //    return Err(DeserializeError::InvalidSignatureScript.into());
-            //}
-
-            //let address = ripemd160(&sha256(&script_sig[script_sig.len() - 33..]));
-            //let sig_type = script_sig[script_sig.len() - 35];
 
             let sequence: Vec<_> = transaction.drain(0..4).collect();
             let sequence = u32::from_le_bytes(sequence[..].try_into()?);
@@ -546,7 +533,29 @@ mod tests {
         let serialized = hex::encode(Vec::from(&transaction)).to_string();
         assert_eq!(input, serialized);
 
-        transaction.verify()
+        let mut inputs = HashMap::new();
+        inputs.insert(
+            (
+                hex::decode("3967ad2de67356564743545dbc41fbf882f8c078ce037afba10bd4435ef3d7b9")?,
+                1,
+            ),
+            Output {
+                amount: 1222064,
+                script: hex::decode("76a9140b16eb01af7a0f6fa56ee8183ca84a27cf4151e988ac")?,
+            },
+        );
+        inputs.insert(
+            (
+                hex::decode("ba3e421c5c0835a07f15c83df681654104593a8979a2d2953fff6d055f33c373")?,
+                1,
+            ),
+            Output {
+                amount: 5274723,
+                script: hex::decode("76a9140c6a3b21b00ddc232da8a62bb24aa031e0a93be188ac")?,
+            },
+        );
+
+        transaction.verify(&inputs)
     }
 
     #[test]
@@ -559,7 +568,19 @@ mod tests {
         let serialized = hex::encode(Vec::from(&transaction)).to_string();
         assert_eq!(input, serialized);
 
-        transaction.verify()
+        let mut inputs = HashMap::new();
+        inputs.insert(
+            (
+                hex::decode("963edcf3e224583deee6aa532d6b39de88af2e68c81ec188d20f8160ae3b4cc4")?,
+                5,
+            ),
+            Output {
+                amount: 3303000,
+                script: hex::decode("76a914152fc05ea22a712eb8227e57dbd8d79451ea0e3e88ac")?,
+            },
+        );
+
+        transaction.verify(&inputs)
     }
 
     #[test]
