@@ -2,21 +2,37 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use gloo_net::http::Request;
+use secp256k1::{PublicKey, SecretKey};
 use serde::{Deserialize, Serialize};
 
-use crate::{bip32::XPrv, ratelimit::RateLimiter};
+use crate::{bip32::XPrv, ratelimit::RateLimiter, util};
 
 #[derive(Default)]
 pub struct WalletState {
     main: FetchingState,
     change: FetchingState,
     pub balance: u64,
-    pub unspent_outputs: Vec<UnspentOutput>,
+    pub unspent_outputs: Vec<RichOutput>,
+}
+
+#[derive(Clone, PartialEq)]
+pub struct RichOutput {
+    pub tx_pos: u32,
+    pub tx_hash: String,
+    pub amount: u64,
+    pub address: [u8; 20],
 }
 
 impl WalletState {
     pub fn change_address(&self) -> String {
         self.change.next_address.clone()
+    }
+
+    pub fn address_keys(&self) -> HashMap<[u8; 20], (SecretKey, PublicKey)> {
+        let mut keys = HashMap::new();
+        keys.extend(self.main.lookup.clone());
+        keys.extend(self.change.lookup.clone());
+        keys
     }
 }
 
@@ -28,10 +44,10 @@ pub async fn fetch_for_address(xprv: &XPrv, rate_limiter: &mut RateLimiter) -> R
     let change = fetch_used_data(xprv_change, rate_limiter).await?;
 
     let active_addresses: Vec<_> = main
-        .active_addresses
+        .addresses()
         .iter()
         .cloned()
-        .chain(change.active_addresses.iter().cloned())
+        .chain(change.addresses().iter().cloned())
         .collect();
 
     let mut balance = 0u64;
@@ -44,7 +60,20 @@ pub async fn fetch_for_address(xprv: &XPrv, rate_limiter: &mut RateLimiter) -> R
             .flat_map(|r| r.unspent.iter())
             .map(|o| o.value)
             .sum::<u64>();
-        unspent_outputs.extend(utxos.into_iter().flat_map(|r| r.unspent));
+        let rich_outputs: Result<Vec<_>> = utxos
+            .into_iter()
+            .flat_map(|r| r.unspent.into_iter().map(move |u| (r.address.clone(), u)))
+            .map(|(address, unspent)| {
+                Ok(RichOutput {
+                    tx_pos: unspent.tx_pos,
+                    tx_hash: unspent.tx_hash,
+                    amount: unspent.value,
+                    address: util::address_bytes(&address)?,
+                })
+            })
+            .collect();
+
+        unspent_outputs.extend(rich_outputs?);
     }
 
     Ok(WalletState {
@@ -58,9 +87,15 @@ pub async fn fetch_for_address(xprv: &XPrv, rate_limiter: &mut RateLimiter) -> R
 struct FetchingState {
     xprv: XPrv,
     last_index: u32,
-    active_addresses: Vec<String>,
+    lookup: HashMap<[u8; 20], (SecretKey, PublicKey)>,
     transactions: Vec<String>,
     next_address: String,
+}
+
+impl FetchingState {
+    fn addresses(&self) -> Vec<String> {
+        self.lookup.keys().cloned().map(util::to_address).collect()
+    }
 }
 
 impl Default for FetchingState {
@@ -68,7 +103,7 @@ impl Default for FetchingState {
         Self {
             xprv: XPrv::empty(),
             last_index: 0,
-            active_addresses: vec![],
+            lookup: HashMap::new(),
             transactions: vec![],
             next_address: String::default(),
         }
@@ -78,14 +113,23 @@ impl Default for FetchingState {
 async fn fetch_used_data(xprv: XPrv, rate_limiter: &mut RateLimiter) -> Result<FetchingState> {
     let mut last_index: u32 = 0;
     let mut transactions = vec![];
-    let mut active_addresses = vec![];
+    let mut lookup = HashMap::new();
     let next_address: String;
     loop {
         rate_limiter.take().await;
-        let addresses: Vec<_> = (last_index..last_index + 20)
-            .map(|i| xprv.derive(i).derive_public().to_address())
+        let addresses_lookup: HashMap<_, _> = (last_index..last_index + 20)
+            .map(|i| {
+                let key = xprv.derive(i);
+                let key_pair = key.to_keypair();
+                (key.derive_public().to_address(), key_pair)
+            })
             .collect();
-        active_addresses.extend(addresses.clone());
+        let addresses: Vec<_> = addresses_lookup.keys().cloned().collect();
+        let address_lookup: Result<HashMap<_, _>> = addresses_lookup
+            .into_iter()
+            .map(|(address, keys)| Ok((util::address_bytes(&address)?, keys)))
+            .collect();
+        lookup.extend(address_lookup?);
         let history = fetch_transactions_for_addresses(&addresses).await?;
         history
             .iter()
@@ -94,7 +138,7 @@ async fn fetch_used_data(xprv: XPrv, rate_limiter: &mut RateLimiter) -> Result<F
             .for_each(|t| transactions.push(t));
 
         last_index += last_tx_address(&addresses, &history);
-        if last_index % 20 != 0 {
+        if last_index == 0 || last_index % 20 != 0 {
             next_address = addresses[last_index as usize + 1].clone();
             break;
         }
@@ -102,7 +146,7 @@ async fn fetch_used_data(xprv: XPrv, rate_limiter: &mut RateLimiter) -> Result<F
     Ok(FetchingState {
         xprv,
         last_index,
-        active_addresses,
+        lookup,
         transactions,
         next_address,
     })
@@ -165,12 +209,13 @@ struct RawTransactionRequest {
     txids: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct UtxoResponse {
+    address: String,
     unspent: Vec<UnspentOutput>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Deserialize)]
 pub struct UnspentOutput {
     pub tx_pos: u32,
     pub tx_hash: String,

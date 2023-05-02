@@ -104,3 +104,38 @@ pub fn ripemd160(data: &[u8]) -> [u8; 20] {
     ripemd.update(data);
     ripemd.finalize().try_into().expect("Should always succeed")
 }
+
+#[derive(Debug, Error)]
+enum AddressError {
+    #[error("Invalid address: {0}")]
+    InvalidAddress(String),
+    #[error("Address checksum error")]
+    ChecksumError,
+}
+
+pub fn address_bytes(address: &str) -> Result<[u8; 20]> {
+    let decoded_address = bs58::decode(address).into_vec()?;
+    if decoded_address.len() != 25 || decoded_address[0] != 0 {
+        return Err(AddressError::InvalidAddress(address.to_owned()).into());
+    }
+
+    let address: [u8; 20] = decoded_address[1..21]
+        .try_into()
+        .expect("Manual bounds set");
+    let checksum = double_sha256(&decoded_address[..21]);
+    if checksum[0..4] != decoded_address[21..] {
+        return Err(AddressError::ChecksumError.into());
+    }
+    Ok(address)
+}
+
+pub fn to_address(bytes: [u8; 20]) -> String {
+    let mut prefixed = Vec::with_capacity(21);
+    prefixed.push(0x00);
+    prefixed.extend(&bytes);
+
+    let checksum = sha256(&sha256(&prefixed));
+    prefixed.extend(&checksum[..4]);
+
+    bs58::encode(prefixed).into_string()
+}

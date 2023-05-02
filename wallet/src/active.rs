@@ -12,7 +12,7 @@ use crate::sending::Input;
 use crate::sending::Output;
 use crate::sending::Transaction;
 use crate::transactions;
-use crate::transactions::UnspentOutput;
+use crate::transactions::RichOutput;
 use crate::transactions::WalletState;
 use crate::util::log;
 use crate::util::SATOSHIS_PER_BSV;
@@ -82,7 +82,7 @@ fn trigger_sync(xprv: XPrv, loader: UseStateHandle<bool>, state: UseStateHandle<
 
 #[derive(Properties, PartialEq)]
 struct SendToAddressProps {
-    outputs: Vec<UnspentOutput>,
+    outputs: Vec<RichOutput>,
     change_address: String,
 }
 
@@ -140,7 +140,7 @@ fn send_to_address(
             let mut output_sum = 0;
             while output_sum < amount && !outputs.is_empty() {
                 let output = outputs.remove(0);
-                output_sum += output.value;
+                output_sum += output.amount;
                 transaction.add_input(
                     Input::new(output.tx_hash, output.tx_pos)
                         .expect("Input tx hash should be decodable"),
@@ -156,7 +156,7 @@ fn send_to_address(
             let mut fee = transaction.suggested_fee();
             while output_sum - amount < fee && !outputs.is_empty() {
                 let output = outputs.remove(0);
-                output_sum += output.value;
+                output_sum += output.amount;
                 transaction.add_input(
                     Input::new(output.tx_hash, output.tx_pos)
                         .expect("Input tx hash should be decodable"),
