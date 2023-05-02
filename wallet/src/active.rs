@@ -6,7 +6,6 @@ use yew_hooks::use_interval;
 
 use crate::bip32::DerivePath;
 use crate::bip32::XPrv;
-use crate::bip32::XPub;
 use crate::ratelimit::RateLimiter;
 use crate::recover::open_settings;
 use crate::sending::Input;

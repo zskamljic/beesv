@@ -35,7 +35,7 @@ impl Seed {
 
         let seed = hmac.finalize().into_bytes();
 
-        Ok(XPrv::new(seed[..32].try_into()?, seed[32..].try_into()?))
+        XPrv::new(seed[..32].try_into()?, seed[32..].try_into()?)
     }
 }
 

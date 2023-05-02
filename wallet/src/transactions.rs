@@ -4,10 +4,7 @@ use anyhow::Result;
 use gloo_net::http::Request;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    bip32::{XPrv, XPub},
-    ratelimit::RateLimiter,
-};
+use crate::{bip32::XPrv, ratelimit::RateLimiter};
 
 #[derive(Default)]
 pub struct WalletState {
@@ -90,7 +87,6 @@ async fn fetch_used_data(xprv: XPrv, rate_limiter: &mut RateLimiter) -> Result<F
                 xprv.derive(i)
                     .expect("Derivation should succeed")
                     .derive_public()
-                    .expect("Derivation should succeed")
                     .to_address()
             })
             .collect();

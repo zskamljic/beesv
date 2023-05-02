@@ -47,7 +47,7 @@ pub struct XPrv {
     depth: u8,
     child_number: u32,
     parent_fingerprint: [u8; 4],
-    key: [u8; 32],
+    key: SecretKey,
     chain_code: [u8; 32],
 }
 
@@ -57,34 +57,33 @@ impl XPrv {
             depth: 0,
             child_number: 0,
             parent_fingerprint: [0u8; 4],
-            key: SecretKey::from_slice(&[0xCD; 32]).unwrap().secret_bytes(),
+            key: SecretKey::from_slice(&[0xCD; 32]).unwrap(),
             chain_code: [0u8; 32],
         }
     }
 
-    pub fn new(key: [u8; 32], chain_code: [u8; 32]) -> Self {
-        Self {
+    pub fn new(key: [u8; 32], chain_code: [u8; 32]) -> Result<Self> {
+        Ok(Self {
             depth: 0,
             child_number: 0,
             parent_fingerprint: [0u8; 4],
-            key,
+            key: SecretKey::from_slice(&key)?,
             chain_code,
-        }
+        })
     }
 
     pub fn derive(&self, index: u32) -> Result<XPrv> {
-        let private_key = SecretKey::from_slice(&self.key)?;
         let mut hmac = Hmac::<Sha512>::new_from_slice(&self.chain_code)?;
 
         // >= 2³¹ indicates hardned keys
         if index >= HARDENED_INDEX {
             let mut key = vec![0];
-            key.extend(self.key);
+            key.extend(self.key.secret_bytes());
             key.extend(index.to_be_bytes());
 
             hmac.update(&key);
         } else {
-            let point = PublicKey::from_secret_key_global(&private_key);
+            let point = PublicKey::from_secret_key_global(&self.key);
             let serialized_point = point.serialize();
             hmac.update(&serialized_point);
             hmac.update(&index.to_be_bytes());
@@ -92,33 +91,32 @@ impl XPrv {
         let i = hmac.finalize().into_bytes();
 
         let secret = SecretKey::from_slice(&i[..32])?;
-        let secret = secret.add_tweak(&private_key.into())?;
+        let secret = secret.add_tweak(&self.key.into())?;
 
         let chain_code = i[32..].try_into()?;
         Ok(XPrv {
             depth: self.depth + 1,
             child_number: index,
             parent_fingerprint: self.fingerprint(),
-            key: secret.secret_bytes(),
+            key: secret,
             chain_code,
         })
     }
 
-    pub fn derive_public(&self) -> Result<XPub> {
-        let public_key = PublicKey::from_secret_key_global(&SecretKey::from_slice(&self.key)?);
+    pub fn derive_public(&self) -> XPub {
+        let public_key = PublicKey::from_secret_key_global(&self.key);
 
-        Ok(XPub {
+        XPub {
             depth: self.depth,
             child_number: self.child_number,
             parent_fingerprint: self.parent_fingerprint,
             public_key,
             chain_code: self.chain_code,
-        })
+        }
     }
 
     fn fingerprint(&self) -> [u8; 4] {
-        let private_key = SecretKey::from_slice(&self.key).unwrap();
-        let public_key = PublicKey::from_secret_key_global(&private_key);
+        let public_key = PublicKey::from_secret_key_global(&self.key);
 
         let sha = sha256(&public_key.serialize());
         let ripemd = ripemd160(&sha);
@@ -146,7 +144,7 @@ impl From<&XPrv> for String {
         xprv.extend(value.child_number.to_be_bytes());
         xprv.extend(&value.chain_code);
         xprv.push(0x0);
-        xprv.extend(&value.key);
+        xprv.extend(&value.key.secret_bytes());
 
         let hashed_xprv = double_sha256(&xprv);
 
@@ -172,7 +170,7 @@ impl FromStr for XPrv {
             depth: decoded[4],
             child_number: u32::from_be_bytes(decoded[9..13].try_into()?),
             parent_fingerprint: decoded[5..9].try_into()?,
-            key: decoded[46..78].try_into()?,
+            key: SecretKey::from_slice(&decoded[46..78])?,
             chain_code: decoded[13..45].try_into()?,
         })
     }
@@ -349,7 +347,7 @@ mod tests {
         let xprv = "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi";
         let key: XPrv = xprv.parse()?;
 
-        let public = key.derive_public()?;
+        let public = key.derive_public();
 
         let serialized = String::try_from(&public)?;
         assert_eq!(
@@ -416,7 +414,7 @@ mod tests {
             serialized
         );
 
-        let public = String::from(&result.derive_public()?);
+        let public = String::from(&result.derive_public());
         assert_eq!(
             "xpub6H1LXWLaKsWFhvm6RVpEL9P4KfRZSW7abD2ttkWP3SSQvnyA8FSVqNTEcYFgJS2UaFcxupHiYkro49S8yGasTvXEYBVPamhGW6cFJodrTHy",
             public
@@ -430,7 +428,7 @@ mod tests {
         let key: XPrv = xprv.parse()?;
 
         let path = "m/0'/0/0";
-        let result = key.derive_path(path)?.derive_public()?;
+        let result = key.derive_path(path)?.derive_public();
 
         let serialized_public = result.public_key.serialize();
         assert_eq!(
