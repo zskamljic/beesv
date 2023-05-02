@@ -4,7 +4,7 @@ use anyhow::Result;
 use gloo_net::http::Request;
 use serde::{Deserialize, Serialize};
 
-use crate::{bip32::XPub, ratelimit::RateLimiter, util::log};
+use crate::{bip32::XPub, ratelimit::RateLimiter};
 
 pub struct WalletState {
     main: FetchingState,
