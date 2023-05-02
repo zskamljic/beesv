@@ -208,6 +208,11 @@ fn send_to_address(
                 hex::encode(Vec::from(&transaction)),
                 transaction.suggested_fee()
             ));
+            spawn_local(async move {
+                if let Err(error) = transactions::publish_transaction(&transaction).await {
+                    alert(&format!("Unable to publish transaction: {error:?}"));
+                }
+            })
         }
     };
 

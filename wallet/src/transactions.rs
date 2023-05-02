@@ -5,7 +5,7 @@ use gloo_net::http::Request;
 use secp256k1::{PublicKey, SecretKey};
 use serde::{Deserialize, Serialize};
 
-use crate::{bip32::XPrv, ratelimit::RateLimiter, util};
+use crate::{bip32::XPrv, ratelimit::RateLimiter, sending::Transaction, util};
 
 #[derive(Default)]
 pub struct WalletState {
@@ -229,6 +229,26 @@ async fn fetch_unspent_outputs(addresses: &[String]) -> Result<Vec<UtxoResponse>
 
     Request::post("https://api.whatsonchain.com/v1/bsv/main/addresses/unspent")
         .body(body)
+        .send()
+        .await?
+        .json()
+        .await
+        .map_err(|e| e.into())
+}
+
+#[derive(Serialize)]
+struct PostTransactionRequest {
+    txhex: String,
+}
+
+pub async fn publish_transaction(transaction: &Transaction) -> Result<String> {
+    let raw_transaction = Vec::from(transaction);
+    let txhex = hex::encode(raw_transaction);
+
+    let request = serde_json::to_string(&PostTransactionRequest { txhex })?;
+
+    Request::post("https://api.whatsonchain.com/v1/bsv/main/tx/raw")
+        .body(request)
         .send()
         .await?
         .json()
