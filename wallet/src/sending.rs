@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fmt::Debug, hash::Hash};
 
 use anyhow::Result;
-use secp256k1::{ecdsa::Signature, KeyPair, Message, PublicKey, Secp256k1};
+use secp256k1::{ecdsa::Signature, Message, PublicKey, SecretKey};
 use thiserror::Error;
 
 use crate::{script, util::double_sha256};
@@ -38,6 +38,12 @@ impl SigHash {
     }
 }
 
+impl Default for SigHash {
+    fn default() -> Self {
+        Self { value: 0x41 }
+    }
+}
+
 struct BaseSigHash {
     value: u32,
 }
@@ -65,15 +71,19 @@ impl From<i32> for SigHash {
 }
 
 #[derive(Error, Debug)]
-enum SignatureError {
+pub enum SignatureError {
     #[error("Input out of bounds: {0}/{1}")]
     InputOutOfBounds(usize, usize),
     #[error("Missing previous input for {0}:{1}")]
     MissingInput(String, u32),
+    #[error("Missing signing key")]
+    MissingKey,
+    #[error("Invalid script")]
+    InvalidScript,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
-struct Input {
+pub struct Input {
     tx_hash: Vec<u8>,
     index: u32,
     script_sig: Vec<u8>,
@@ -81,28 +91,14 @@ struct Input {
 }
 
 impl Input {
-    fn new(tx_hash: Vec<u8>, index: u32) -> Result<Self> {
-        Ok(Self {
+    pub fn new(tx_hash: Vec<u8>, index: u32) -> Self {
+        Self {
             tx_hash,
             index,
             script_sig: vec![],
-            //sig_type: SIGHASH_ALL,
             sequence: 0xFFFF_FFFF,
-        })
+        }
     }
-
-    /*
-    fn override_sign(&mut self) {
-        self.script_sig = self.create_locking_script();
-    }*/
-
-    /*
-    fn create_locking_script(&self) -> Vec<u8> {
-        let mut script = vec![0x76, 0xA9, 0x14]; // OP_DUP, OP_HASH160, push 20 bytes to stack
-        script.extend(self.address);
-        script.extend(vec![0x88, 0xAC]); // OP_EQUALVERIFY OP_CHECKSIG
-        script
-    }*/
 }
 
 impl Debug for Input {
@@ -135,9 +131,25 @@ impl From<&Input> for Vec<u8> {
 }
 
 #[derive(Clone)]
-struct Output {
+pub struct Output {
     amount: u64,
     script: Vec<u8>,
+}
+
+impl Output {
+    fn address(&self) -> Result<[u8; 20]> {
+        if self.script.len() != 25
+            || self.script[0] != 0x76
+            || self.script[1] != 0xA9
+            || self.script[2] != 0x14
+            || self.script[23] != 0x88
+            || self.script[24] != 0xAC
+        {
+            return Err(SignatureError::InvalidScript.into());
+        }
+        let address = self.script[3..23].try_into()?;
+        Ok(address)
+    }
 }
 
 impl Debug for Output {
@@ -161,7 +173,7 @@ impl From<&Output> for Vec<u8> {
 }
 
 #[derive(Clone, Debug)]
-struct Transaction {
+pub struct Transaction {
     version: u32,
     inputs: Vec<Input>,
     outputs: Vec<Output>,
@@ -169,15 +181,6 @@ struct Transaction {
 }
 
 impl Transaction {
-    pub fn new() -> Self {
-        Self {
-            version: 1,
-            inputs: vec![],
-            outputs: vec![],
-            locktime: 0,
-        }
-    }
-
     pub fn add_input(&mut self, input: Input) {
         self.inputs.push(input);
     }
@@ -186,30 +189,41 @@ impl Transaction {
         self.outputs.push(output);
     }
 
-    pub fn sign_inputs(&mut self, address_keys: HashMap<[u8; 20], KeyPair>) {
-        let mut copy = self.clone();
-        copy.inputs.iter_mut().for_each(|i| i.script_sig.clear());
-
+    pub fn sign_inputs(
+        &mut self,
+        previous_outputs: &HashMap<(Vec<u8>, u32), Output>,
+        address_keys: &HashMap<[u8; 20], (SecretKey, PublicKey)>,
+    ) -> Result<()> {
         for i in 0..self.inputs.len() {
-            let mut current_signing = copy.clone();
-            //current_signing.inputs[i].override_sign();
+            let input = &self.inputs[i];
+            let prev_out = previous_outputs
+                .get(&(input.tx_hash.clone(), input.index))
+                .ok_or(SignatureError::MissingInput(
+                    hex::encode(&input.tx_hash),
+                    input.index,
+                ))?;
 
-            let mut serialized = Vec::from(&current_signing);
-            //serialized.extend(SIGHASH_ALL.to_le_bytes());
-            let hash = double_sha256(&serialized);
+            let hash = self.hash_fork(i, &prev_out.script, &SigHash::default(), prev_out.amount)?;
 
-            let secp = Secp256k1::new();
-            //let keypair = address_keys.get(&self.inputs[i].address).unwrap(); // TODO: fail if not present
-            //let result =
-            //    secp.sign_ecdsa(&Message::from_slice(&hash).unwrap(), &keypair.secret_key());
-            //let mut script_sig = result.serialize_der().to_vec();
-            //script_sig.push(SIGHASH_ALL | SIGHASH_FORKID);
-            //script_sig.extend(keypair.public_key().serialize());
-            //self.inputs[i].script_sig = script_sig;
+            let (sk, pk) = address_keys
+                .get(&prev_out.address()?)
+                .ok_or(SignatureError::MissingKey)?;
+
+            let signature = sk.sign_ecdsa(Message::from_slice(&hash)?);
+            let der = signature.serialize_der().to_vec();
+            let mut sig_script = vec![];
+            sig_script.extend(encode_compact_size(der.len() as u64 + 1));
+            sig_script.extend(&der);
+            sig_script.push(0x41);
+            sig_script.push(0x21);
+            sig_script.extend(&pk.serialize());
+
+            self.inputs[i].script_sig = sig_script;
         }
+        Ok(())
     }
 
-    pub fn verify(&self, outputs: &HashMap<(Vec<u8>, u32), Output>) -> Result<()> {
+    pub fn verify(&self, previous_outputs: &HashMap<(Vec<u8>, u32), Output>) -> Result<()> {
         for i in 0..self.inputs.len() {
             let input = &self.inputs[i];
             let signature_length = input.script_sig[0] as usize;
@@ -221,9 +235,12 @@ impl Transaction {
             let sig_hash = SigHash {
                 value: input.script_sig[signature_length] as u32,
             };
-            let output = outputs.get(&(input.tx_hash.clone(), input.index)).ok_or(
-                SignatureError::MissingInput(hex::encode(&input.tx_hash), input.index),
-            )?;
+            let output = previous_outputs
+                .get(&(input.tx_hash.clone(), input.index))
+                .ok_or(SignatureError::MissingInput(
+                    hex::encode(&input.tx_hash),
+                    input.index,
+                ))?;
             let script = &output.script;
             let message = if sig_hash.has_fork_id() {
                 self.hash_fork(i, script, &sig_hash, output.amount)?
@@ -232,8 +249,7 @@ impl Transaction {
             };
             let message = Message::from_slice(&message)?;
 
-            let secp = Secp256k1::new();
-            secp.verify_ecdsa(&message, &signature, &pub_key)?;
+            signature.verify(&message, &pub_key)?;
             println!("Input valid");
         }
 
@@ -356,6 +372,17 @@ impl Transaction {
 
     fn has_invalid_flag(&self, index: usize, sig_hash: &SigHash) -> bool {
         index >= self.inputs.len() || sig_hash.base().has_single() && index >= self.outputs.len()
+    }
+}
+
+impl Default for Transaction {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            inputs: vec![],
+            outputs: vec![],
+            locktime: 0,
+        }
     }
 }
 
@@ -483,7 +510,7 @@ fn encode_compact_size(input: u64) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
+    use std::{fs::File, str::FromStr};
 
     use anyhow::Result;
 
@@ -491,11 +518,11 @@ mod tests {
 
     #[test]
     fn create_transaction() -> Result<()> {
-        let mut transaction = Transaction::new();
+        let mut transaction = Transaction::default();
         transaction.add_input(Input::new(
             hex::decode("3f4fa19803dec4d6a84fae3821da7ac7577080ef75451294e71f9b20e0ab1e7b")?,
             0,
-        )?);
+        ));
         transaction.add_output(Output {
             amount: 4999990000,
             script: hex::decode("76a914cbc20a7664f2f69e5355aa427045bc15e7c6c77288ac")?,
@@ -628,5 +655,50 @@ mod tests {
         } else {
             transaction.hash_original(index, script, sig_hash)
         }
+    }
+
+    #[test]
+    fn sign_generates_correct() -> Result<()> {
+        let mut transaction = Transaction::default();
+        transaction.add_input(Input::new(
+            hex::decode("ba3e421c5c0835a07f15c83df681654104593a8979a2d2953fff6d055f33c373")?,
+            1,
+        ));
+        transaction.add_output(Output {
+            amount: 5274723,
+            script: hex::decode("76a9140c6a3b21b00ddc232da8a62bb24aa031e0a93be188ac")?,
+        });
+
+        let sk = SecretKey::from_str(
+            "2e7d8617942ef7cb24aae1ab35dfa39e5e3d7f4fc3060ca5247acf375a8ec456",
+        )?;
+        let pk = PublicKey::from_str(
+            "03209b1875a86a7dbc7a8b65965b5df44a97d5010725c920a28869ed740ff5852e",
+        )?;
+
+        let mut address_keys = HashMap::new();
+        address_keys.insert(
+            [
+                0x0c, 0x6a, 0x3b, 0x21, 0xb0, 0x0d, 0xdc, 0x23, 0x2d, 0xa8, 0xa6, 0x2b, 0xb2, 0x4a,
+                0xa0, 0x31, 0xe0, 0xa9, 0x3b, 0xe1,
+            ],
+            (sk, pk),
+        );
+
+        let mut prev_outs = HashMap::new();
+        prev_outs.insert(
+            (
+                hex::decode("ba3e421c5c0835a07f15c83df681654104593a8979a2d2953fff6d055f33c373")?,
+                1,
+            ),
+            Output {
+                amount: 5274723,
+                script: hex::decode("76a9140c6a3b21b00ddc232da8a62bb24aa031e0a93be188ac")?,
+            },
+        );
+
+        transaction.sign_inputs(&prev_outs, &address_keys)?;
+
+        transaction.verify(&prev_outs)
     }
 }
