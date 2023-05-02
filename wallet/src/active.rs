@@ -41,7 +41,7 @@ pub struct FullscreenProps {
 #[function_component(Fullscreen)]
 pub fn fullscreen(FullscreenProps { xprv }: &FullscreenProps) -> Html {
     let syncing = use_state(|| false);
-    let state = use_state(|| WalletState::default());
+    let state = use_state(WalletState::default);
 
     let derived_key = xprv.derive_path("m/0'").expect("Should derive key");
 
@@ -99,7 +99,7 @@ fn send_to_address(
         key_fetcher,
     }: &SendToAddressProps,
 ) -> Html {
-    let address = use_state(|| String::default());
+    let address = use_state(String::default);
     let amount = use_state(|| 0f32);
 
     let set_address = {
