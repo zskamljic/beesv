@@ -41,14 +41,11 @@ pub fn fullscreen(FullscreenProps { xprv }: &FullscreenProps) -> Html {
     let state = use_state(|| WalletState::default());
 
     let derived_key = xprv.derive_path("m/0'").expect("Should derive key");
-    let public = derived_key
-        .derive_public()
-        .expect("Should create public key");
 
     let loader = syncing.clone();
     let mutable_state = state.clone();
     use_interval(
-        move || trigger_sync(public.clone(), loader.clone(), mutable_state.clone()),
+        move || trigger_sync(derived_key.clone(), loader.clone(), mutable_state.clone()),
         5000,
     );
 
@@ -67,7 +64,7 @@ pub fn fullscreen(FullscreenProps { xprv }: &FullscreenProps) -> Html {
     }
 }
 
-fn trigger_sync(xpub: XPub, loader: UseStateHandle<bool>, state: UseStateHandle<WalletState>) {
+fn trigger_sync(xprv: XPrv, loader: UseStateHandle<bool>, state: UseStateHandle<WalletState>) {
     if *loader {
         return;
     }
@@ -76,7 +73,7 @@ fn trigger_sync(xpub: XPub, loader: UseStateHandle<bool>, state: UseStateHandle<
 
     let mut rate_limiter = RateLimiter::new(3);
     spawn_local(async move {
-        let result = transactions::fetch_for_address(&xpub, &mut rate_limiter)
+        let result = transactions::fetch_for_address(&xprv, &mut rate_limiter)
             .await
             .unwrap();
         state.set(result);

@@ -4,7 +4,10 @@ use anyhow::Result;
 use gloo_net::http::Request;
 use serde::{Deserialize, Serialize};
 
-use crate::{bip32::XPub, ratelimit::RateLimiter};
+use crate::{
+    bip32::{XPrv, XPub},
+    ratelimit::RateLimiter,
+};
 
 #[derive(Default)]
 pub struct WalletState {
@@ -20,12 +23,12 @@ impl WalletState {
     }
 }
 
-pub async fn fetch_for_address(xpub: &XPub, rate_limiter: &mut RateLimiter) -> Result<WalletState> {
-    let xpub_main = xpub.derive(0)?;
-    let xpub_change = xpub.derive(1)?;
+pub async fn fetch_for_address(xprv: &XPrv, rate_limiter: &mut RateLimiter) -> Result<WalletState> {
+    let xprv_main = xprv.derive(0)?;
+    let xprv_change = xprv.derive(1)?;
 
-    let main = fetch_used_data(xpub_main, rate_limiter).await?;
-    let change = fetch_used_data(xpub_change, rate_limiter).await?;
+    let main = fetch_used_data(xprv_main, rate_limiter).await?;
+    let change = fetch_used_data(xprv_change, rate_limiter).await?;
 
     let active_addresses: Vec<_> = main
         .active_addresses
@@ -56,7 +59,7 @@ pub async fn fetch_for_address(xpub: &XPub, rate_limiter: &mut RateLimiter) -> R
 }
 
 struct FetchingState {
-    xpub: XPub,
+    xprv: XPrv,
     last_index: u32,
     active_addresses: Vec<String>,
     transactions: Vec<String>,
@@ -66,7 +69,7 @@ struct FetchingState {
 impl Default for FetchingState {
     fn default() -> Self {
         Self {
-            xpub: XPub::empty(),
+            xprv: XPrv::empty(),
             last_index: 0,
             active_addresses: vec![],
             transactions: vec![],
@@ -75,7 +78,7 @@ impl Default for FetchingState {
     }
 }
 
-async fn fetch_used_data(xpub: XPub, rate_limiter: &mut RateLimiter) -> Result<FetchingState> {
+async fn fetch_used_data(xprv: XPrv, rate_limiter: &mut RateLimiter) -> Result<FetchingState> {
     let mut last_index: u32 = 0;
     let mut transactions = vec![];
     let mut active_addresses = vec![];
@@ -84,7 +87,9 @@ async fn fetch_used_data(xpub: XPub, rate_limiter: &mut RateLimiter) -> Result<F
         rate_limiter.take().await;
         let addresses: Vec<_> = (last_index..last_index + 20)
             .map(|i| {
-                xpub.derive(i)
+                xprv.derive(i)
+                    .expect("Derivation should succeed")
+                    .derive_public()
                     .expect("Derivation should succeed")
                     .to_address()
             })
@@ -104,7 +109,7 @@ async fn fetch_used_data(xpub: XPub, rate_limiter: &mut RateLimiter) -> Result<F
         }
     }
     Ok(FetchingState {
-        xpub,
+        xprv,
         last_index,
         active_addresses,
         transactions,

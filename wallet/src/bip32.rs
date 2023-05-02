@@ -3,7 +3,7 @@ use std::str::FromStr;
 use anyhow::Result;
 use hmac::{Hmac, Mac};
 use regex::Regex;
-use secp256k1::{PublicKey, Secp256k1, SecretKey};
+use secp256k1::{PublicKey, SecretKey};
 use sha2::Sha512;
 use thiserror::Error;
 
@@ -52,6 +52,16 @@ pub struct XPrv {
 }
 
 impl XPrv {
+    pub fn empty() -> Self {
+        Self {
+            depth: 0,
+            child_number: 0,
+            parent_fingerprint: [0u8; 4],
+            key: SecretKey::from_slice(&[0xCD; 32]).unwrap().secret_bytes(),
+            chain_code: [0u8; 32],
+        }
+    }
+
     pub fn new(key: [u8; 32], chain_code: [u8; 32]) -> Self {
         Self {
             depth: 0,
@@ -74,7 +84,7 @@ impl XPrv {
 
             hmac.update(&key);
         } else {
-            let point = private_key.public_key(&Secp256k1::new());
+            let point = PublicKey::from_secret_key_global(&private_key);
             let serialized_point = point.serialize();
             hmac.update(&serialized_point);
             hmac.update(&index.to_be_bytes());
@@ -95,7 +105,7 @@ impl XPrv {
     }
 
     pub fn derive_public(&self) -> Result<XPub> {
-        let public_key = SecretKey::from_slice(&self.key)?.public_key(&Secp256k1::new());
+        let public_key = PublicKey::from_secret_key_global(&SecretKey::from_slice(&self.key)?);
 
         Ok(XPub {
             depth: self.depth,
@@ -108,7 +118,7 @@ impl XPrv {
 
     fn fingerprint(&self) -> [u8; 4] {
         let private_key = SecretKey::from_slice(&self.key).unwrap();
-        let public_key = private_key.public_key(&Secp256k1::new());
+        let public_key = PublicKey::from_secret_key_global(&private_key);
 
         let sha = sha256(&public_key.serialize());
         let ripemd = ripemd160(&sha);
@@ -178,18 +188,6 @@ pub struct XPub {
 }
 
 impl XPub {
-    pub fn empty() -> Self {
-        Self {
-            depth: 0,
-            child_number: 0,
-            parent_fingerprint: [0u8; 4],
-            public_key: PublicKey::from_secret_key_global(
-                &SecretKey::from_slice(&[0xCD; 32]).unwrap(),
-            ),
-            chain_code: [0u8; 32],
-        }
-    }
-
     fn fingerprint(&self) -> [u8; 4] {
         let sha = sha256(&self.public_key.serialize());
         let ripemd = ripemd160(&sha);
@@ -206,8 +204,7 @@ impl XPub {
         hmac.update(&index.to_be_bytes());
         let i = hmac.finalize().into_bytes();
 
-        let public_key = SecretKey::from_slice(&i[..32])?
-            .public_key(&Secp256k1::new())
+        let public_key = PublicKey::from_secret_key_global(&SecretKey::from_slice(&i[..32])?)
             .combine(&self.public_key)?;
 
         let chain_code = i[32..].try_into()?;
