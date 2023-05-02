@@ -178,6 +178,18 @@ pub struct XPub {
 }
 
 impl XPub {
+    pub fn empty() -> Self {
+        Self {
+            depth: 0,
+            child_number: 0,
+            parent_fingerprint: [0u8; 4],
+            public_key: PublicKey::from_secret_key_global(
+                &SecretKey::from_slice(&[0xCD; 32]).unwrap(),
+            ),
+            chain_code: [0u8; 32],
+        }
+    }
+
     fn fingerprint(&self) -> [u8; 4] {
         let sha = sha256(&self.public_key.serialize());
         let ripemd = ripemd160(&sha);

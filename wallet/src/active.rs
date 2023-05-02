@@ -9,7 +9,14 @@ use crate::bip32::XPrv;
 use crate::bip32::XPub;
 use crate::ratelimit::RateLimiter;
 use crate::recover::open_settings;
+use crate::sending::Input;
+use crate::sending::Output;
+use crate::sending::Transaction;
 use crate::transactions;
+use crate::transactions::UnspentOutput;
+use crate::transactions::WalletState;
+use crate::util::log;
+use crate::util::SATOSHIS_PER_BSV;
 
 #[function_component(Popup)]
 pub fn popup() -> Html {
@@ -31,7 +38,7 @@ pub struct FullscreenProps {
 #[function_component(Fullscreen)]
 pub fn fullscreen(FullscreenProps { xprv }: &FullscreenProps) -> Html {
     let syncing = use_state(|| false);
-    let balance = use_state(|| 0);
+    let state = use_state(|| WalletState::default());
 
     let derived_key = xprv.derive_path("m/0'").expect("Should derive key");
     let public = derived_key
@@ -39,28 +46,28 @@ pub fn fullscreen(FullscreenProps { xprv }: &FullscreenProps) -> Html {
         .expect("Should create public key");
 
     let loader = syncing.clone();
-    let balance_state = balance.clone();
+    let mutable_state = state.clone();
     use_interval(
-        move || trigger_sync(public.clone(), loader.clone(), balance_state.clone()),
+        move || trigger_sync(public.clone(), loader.clone(), mutable_state.clone()),
         5000,
     );
 
     html! {
         <>
             <header><h1>{"Welcome to BeeSV"}</h1></header>
-            <p>{"Balance: "}{format!("{:.08}", *balance as f32 / 100_000_000f32)}{"₿"}</p>
+            <p>{"Balance: "}{format!("{:.08}", state.balance as f32 / SATOSHIS_PER_BSV as f32)}{"₿"}</p>
             if *syncing {
                 <p>{"Syncing..."}</p>
             } else {
                 <p>{"Synced"}</p>
             }
             <p>{"Send BSV"}</p>
-            <SendToAddress />
+            <SendToAddress outputs={state.unspent_outputs.to_vec()} change_address={state.change_address()} />
         </>
     }
 }
 
-fn trigger_sync(xpub: XPub, loader: UseStateHandle<bool>, balance: UseStateHandle<u64>) {
+fn trigger_sync(xpub: XPub, loader: UseStateHandle<bool>, state: UseStateHandle<WalletState>) {
     if *loader {
         return;
     }
@@ -72,13 +79,24 @@ fn trigger_sync(xpub: XPub, loader: UseStateHandle<bool>, balance: UseStateHandl
         let result = transactions::fetch_for_address(&xpub, &mut rate_limiter)
             .await
             .unwrap();
-        balance.set(result.balance);
+        state.set(result);
         loader.set(false);
     });
 }
 
+#[derive(Properties, PartialEq)]
+struct SendToAddressProps {
+    outputs: Vec<UnspentOutput>,
+    change_address: String,
+}
+
 #[function_component(SendToAddress)]
-fn send_to_address() -> Html {
+fn send_to_address(
+    SendToAddressProps {
+        outputs,
+        change_address,
+    }: &SendToAddressProps,
+) -> Html {
     let address = use_state(|| String::default());
     let amount = use_state(|| 0f32);
 
@@ -100,6 +118,8 @@ fn send_to_address() -> Html {
     };
 
     let send_transaction = {
+        let outputs = outputs.clone();
+        let change_address = change_address.clone();
         move |_| {
             if address.is_empty() {
                 alert("Address was not present");
@@ -109,6 +129,68 @@ fn send_to_address() -> Html {
                 alert("Must send a small value");
                 return;
             }
+            let amount = (*amount * SATOSHIS_PER_BSV as f32) as u64;
+            let mut transaction = Transaction::default();
+            let output = match Output::new(amount, &address) {
+                Ok(output) => output,
+                Err(error) => {
+                    alert(&format!("Can't send: {error:?}"));
+                    return;
+                }
+            };
+            transaction.add_output(output);
+
+            let mut outputs = outputs.clone();
+            let mut output_sum = 0;
+            while output_sum < amount && !outputs.is_empty() {
+                let output = outputs.remove(0);
+                output_sum += output.value;
+                transaction.add_input(
+                    Input::new(output.tx_hash, output.tx_pos)
+                        .expect("Input tx hash should be decodable"),
+                );
+            }
+            if amount > output_sum {
+                alert(&format!(
+                    "Unable to send, insufficient balance, missing {}",
+                    amount - output_sum
+                ));
+                return;
+            }
+            let mut fee = transaction.suggested_fee();
+            while output_sum - amount < fee && !outputs.is_empty() {
+                let output = outputs.remove(0);
+                output_sum += output.value;
+                transaction.add_input(
+                    Input::new(output.tx_hash, output.tx_pos)
+                        .expect("Input tx hash should be decodable"),
+                );
+                fee = transaction.suggested_fee();
+            }
+            if output_sum - amount < fee {
+                alert(&format!(
+                    "Unable to send transaction, insufficient BSV for transaction+fee: {}",
+                    amount + fee
+                ));
+                return;
+            }
+            let change = output_sum - amount - fee;
+            let change = match Output::new(change, &change_address) {
+                Ok(change) => change,
+                Err(error) => {
+                    alert(&format!(
+                        "Unable to send transaction, invalid change address: {error:?}"
+                    ));
+                    return;
+                }
+            };
+            transaction.add_output(change);
+
+            log(&format!(
+                "Transaction: {}, fee: {}",
+                hex::encode(Vec::from(&transaction)),
+                transaction.suggested_fee()
+            ));
         }
     };
 

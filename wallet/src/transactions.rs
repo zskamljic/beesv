@@ -6,10 +6,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::{bip32::XPub, ratelimit::RateLimiter};
 
+#[derive(Default)]
 pub struct WalletState {
     main: FetchingState,
     change: FetchingState,
     pub balance: u64,
+    pub unspent_outputs: Vec<UnspentOutput>,
+}
+
+impl WalletState {
+    pub fn change_address(&self) -> String {
+        self.change.next_address.clone()
+    }
 }
 
 pub async fn fetch_for_address(xpub: &XPub, rate_limiter: &mut RateLimiter) -> Result<WalletState> {
@@ -27,20 +35,23 @@ pub async fn fetch_for_address(xpub: &XPub, rate_limiter: &mut RateLimiter) -> R
         .collect();
 
     let mut balance = 0u64;
+    let mut unspent_outputs = vec![];
     for chunk in active_addresses.chunks(20) {
         rate_limiter.take().await;
-        let unspent_outputs = fetch_unspent_outputs(chunk).await?;
-        balance += unspent_outputs
+        let utxos = fetch_unspent_outputs(chunk).await?;
+        balance += utxos
             .iter()
             .flat_map(|r| r.unspent.iter())
             .map(|o| o.value)
             .sum::<u64>();
+        unspent_outputs.extend(utxos.into_iter().flat_map(|r| r.unspent));
     }
 
     Ok(WalletState {
         main,
         change,
         balance,
+        unspent_outputs,
     })
 }
 
@@ -49,12 +60,26 @@ struct FetchingState {
     last_index: u32,
     active_addresses: Vec<String>,
     transactions: Vec<String>,
+    next_address: String,
+}
+
+impl Default for FetchingState {
+    fn default() -> Self {
+        Self {
+            xpub: XPub::empty(),
+            last_index: 0,
+            active_addresses: vec![],
+            transactions: vec![],
+            next_address: String::default(),
+        }
+    }
 }
 
 async fn fetch_used_data(xpub: XPub, rate_limiter: &mut RateLimiter) -> Result<FetchingState> {
     let mut last_index: u32 = 0;
     let mut transactions = vec![];
     let mut active_addresses = vec![];
+    let next_address: String;
     loop {
         rate_limiter.take().await;
         let addresses: Vec<_> = (last_index..last_index + 20)
@@ -74,6 +99,7 @@ async fn fetch_used_data(xpub: XPub, rate_limiter: &mut RateLimiter) -> Result<F
 
         last_index += last_tx_address(&addresses, &history);
         if last_index % 20 != 0 {
+            next_address = addresses[last_index as usize + 1].clone();
             break;
         }
     }
@@ -82,6 +108,7 @@ async fn fetch_used_data(xpub: XPub, rate_limiter: &mut RateLimiter) -> Result<F
         last_index,
         active_addresses,
         transactions,
+        next_address,
     })
 }
 
@@ -168,16 +195,14 @@ async fn fetch_raw_transactions(hashes: &[String]) -> Result<Vec<RawTransaction>
 
 #[derive(Debug, Deserialize)]
 struct UtxoResponse {
-    address: String,
     unspent: Vec<UnspentOutput>,
 }
 
-#[derive(Debug, Deserialize)]
-struct UnspentOutput {
-    height: u64,
-    tx_pos: u32,
-    tx_hash: String,
-    value: u64,
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct UnspentOutput {
+    pub tx_pos: u32,
+    pub tx_hash: String,
+    pub value: u64,
 }
 
 async fn fetch_unspent_outputs(addresses: &[String]) -> Result<Vec<UtxoResponse>> {

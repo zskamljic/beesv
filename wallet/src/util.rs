@@ -7,6 +7,8 @@ use thiserror::Error;
 use wasm_bindgen::prelude::*;
 use web_sys::window;
 
+pub const SATOSHIS_PER_BSV: u64 = 100_000_000;
+
 #[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(js_namespace = console)]

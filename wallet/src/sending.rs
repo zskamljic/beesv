@@ -91,13 +91,17 @@ pub struct Input {
 }
 
 impl Input {
-    pub fn new(tx_hash: Vec<u8>, index: u32) -> Self {
+    pub fn new_decoded(tx_hash: Vec<u8>, index: u32) -> Self {
         Self {
             tx_hash,
             index,
             script_sig: vec![],
             sequence: 0xFFFF_FFFF,
         }
+    }
+
+    pub fn new(tx_hash: String, index: u32) -> Result<Self> {
+        Ok(Input::new_decoded(hex::decode(tx_hash)?, index))
     }
 }
 
@@ -136,7 +140,36 @@ pub struct Output {
     script: Vec<u8>,
 }
 
+#[derive(Error, Debug)]
+enum SendingError {
+    #[error("Invalid address: {0}")]
+    InvalidAddress(String),
+    #[error("Address checksum error")]
+    ChecksumError,
+}
+
 impl Output {
+    pub fn new(amount: u64, address: &str) -> Result<Self> {
+        let decoded_address = bs58::decode(address).into_vec()?;
+        if decoded_address.len() != 25 || decoded_address[0] != 0 {
+            return Err(SendingError::InvalidAddress(address.to_owned()).into());
+        }
+
+        let address: [u8; 20] = decoded_address[1..21]
+            .try_into()
+            .expect("Manual bounds set");
+        let checksum = double_sha256(&decoded_address[..21]);
+        if checksum[0..4] != decoded_address[21..] {
+            return Err(SendingError::ChecksumError.into());
+        }
+
+        let mut script = vec![0x76, 0xA9, 0x14];
+        script.extend(address);
+        script.extend([0x88, 0xAC]);
+
+        Ok(Self { amount, script })
+    }
+
     fn address(&self) -> Result<[u8; 20]> {
         if self.script.len() != 25
             || self.script[0] != 0x76
@@ -221,6 +254,12 @@ impl Transaction {
             self.inputs[i].script_sig = sig_script;
         }
         Ok(())
+    }
+
+    pub fn suggested_fee(&self) -> u64 {
+        let sig_len = self.inputs.len() * 107;
+
+        Vec::from(self).len() as u64 + 34 + sig_len as u64
     }
 
     pub fn verify(&self, previous_outputs: &HashMap<(Vec<u8>, u32), Output>) -> Result<()> {
@@ -519,7 +558,7 @@ mod tests {
     #[test]
     fn create_transaction() -> Result<()> {
         let mut transaction = Transaction::default();
-        transaction.add_input(Input::new(
+        transaction.add_input(Input::new_decoded(
             hex::decode("3f4fa19803dec4d6a84fae3821da7ac7577080ef75451294e71f9b20e0ab1e7b")?,
             0,
         ));
@@ -660,7 +699,7 @@ mod tests {
     #[test]
     fn sign_generates_correct() -> Result<()> {
         let mut transaction = Transaction::default();
-        transaction.add_input(Input::new(
+        transaction.add_input(Input::new_decoded(
             hex::decode("ba3e421c5c0835a07f15c83df681654104593a8979a2d2953fff6d055f33c373")?,
             1,
         ));
